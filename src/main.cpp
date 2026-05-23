@@ -23,7 +23,8 @@ static void startBt() {
 const int W = 135, H = 240;
 const int CX = W / 2;
 const int CY_BASE = 120;
-const int LED_PIN = 10;          // red LED, active-low
+const int LED_PIN   = 10;        // red LED, active-low
+const int VIBRO_PIN = 0;         // Vibrator HAT control (M5StickC Plus HAT G0)
 
 // Colors used across multiple UI surfaces
 const uint16_t HOT   = 0xFA20;   // red-orange: warnings, impatience, deny
@@ -111,6 +112,28 @@ bool     responseSent = false;
 
 static void beep(uint16_t freq, uint16_t dur) {
   if (settings().sound) M5.Beep.tone(freq, dur);
+}
+
+static void vibroPulse(uint16_t ms) {
+  digitalWrite(VIBRO_PIN, HIGH);
+  delay(ms);
+  digitalWrite(VIBRO_PIN, LOW);
+}
+static void buzzPromptAwake() {
+  if (!settings().vibrate) return;
+  vibroPulse(100);
+}
+static void buzzPromptNapping() {  // long-short-long: harder to miss through a surface
+  if (!settings().vibrate) return;
+  vibroPulse(200); delay(80); vibroPulse(100); delay(80); vibroPulse(200);
+}
+static void buzzDenial() {
+  if (!settings().vibrate || !settings().vibrateOnDenial) return;
+  vibroPulse(50); delay(40); vibroPulse(50);
+}
+static void buzzLevelUp() {
+  if (!settings().vibrate) return;
+  vibroPulse(50); delay(40); vibroPulse(70); delay(40); vibroPulse(100);
 }
 
 static void sendCmd(const char* json) {
@@ -729,12 +752,17 @@ static void drawApproval() {
 
   spr.setTextSize(1);
   spr.setCursor(4, H - AREA + 4);
-  uint32_t elapsed = millis() - promptArrivedMs;
-  uint32_t remaining = elapsed < PROMPT_TIMEOUT_MS ? PROMPT_TIMEOUT_MS - elapsed : 0;
-  uint32_t remSec = remaining / 1000;
-  spr.setTextColor(remSec < 30 ? HOT : p.textDim, p.bg);
-  if (remSec >= 60) spr.printf("approve? ~%um", remSec / 60);
-  else              spr.printf("approve? %us",   remSec);
+  if (settings().showCountdown) {
+    uint32_t elapsed = millis() - promptArrivedMs;
+    uint32_t remaining = elapsed < PROMPT_TIMEOUT_MS ? PROMPT_TIMEOUT_MS - elapsed : 0;
+    uint32_t remSec = remaining / 1000;
+    spr.setTextColor(remSec < 30 ? HOT : p.textDim, p.bg);
+    if (remSec >= 60) spr.printf("approve? ~%um", remSec / 60);
+    else              spr.printf("approve? %us",   remSec);
+  } else {
+    spr.setTextColor(p.textDim, p.bg);
+    spr.print("approve?");
+  }
 
   // Size 2 only if it fits one line (~10 chars at 12px on 135px screen)
   int toolLen = strlen(tama.promptTool);
@@ -834,10 +862,12 @@ static void drawPetStats(const Palette& p) {
   };
   tokFmt("tokens   ", stats().tokens, y + 30);
   tokFmt("today    ", tama.tokensToday, y + 40);
-  uint16_t vel = statsMedianVelocity();
-  if (vel > 0) {
-    spr.setCursor(6, y + 50);
-    spr.printf("response %us", vel);
+  if (settings().showVelocity) {
+    uint16_t vel = statsMedianVelocity();
+    if (vel > 0) {
+      spr.setCursor(6, y + 50);
+      spr.printf("response %us", vel);
+    }
   }
 }
 
@@ -934,13 +964,13 @@ void drawHUD() {
     spr.setCursor(4, H - AREA + 2 + i * LH);
     spr.print(disp[row]);
   }
-  // Bottom-right corner: scroll offset takes priority; connection type fills
+  // Bottom-right corner: scroll offset takes priority; connection badge fills
   // the gap when not scrolled so the transport is always glanceable.
   spr.setTextColor(p.body, p.bg);
   spr.setCursor(W - 18, H - LH - 2);
-  if (msgScroll > 0)        spr.printf("-%u",  msgScroll);
-  else if (dataBtActive())  spr.print("BT");
-  else if (dataConnected()) spr.print("USB");
+  if (msgScroll > 0)                             spr.printf("-%u", msgScroll);
+  else if (settings().badge && dataBtActive())   spr.print("BT");
+  else if (settings().badge && dataConnected())  spr.print("USB");
 }
 
 void setup() {
@@ -951,6 +981,8 @@ void setup() {
   startBt();
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);   // off
+  pinMode(VIBRO_PIN, OUTPUT);
+  digitalWrite(VIBRO_PIN, LOW);  // off
   applyBrightness();
   lastInteractMs = millis();
   statsLoad();
@@ -1000,7 +1032,7 @@ void loop() {
   uint32_t now = millis();
 
   dataPoll(&tama);
-  if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
+  if (statsPollLevelUp()) { triggerOneShot(P_CELEBRATE, 3000); buzzLevelUp(); }
   baseState = derive(tama);
 
   // After waking the screen, hold sleep for 12s so users see the wake-up
@@ -1035,7 +1067,8 @@ void loop() {
     if (tama.promptId[0]) {
       promptArrivedMs = millis();
       wake();
-      beep(1200, 80);   // alert chirp
+      beep(1200, 80);
+      if (napping) buzzPromptNapping(); else buzzPromptAwake();
       // Jump to the approval screen no matter what was open — drawApproval
       // only runs from drawHUD which only runs in DISP_NORMAL.
       displayMode = DISP_NORMAL;
@@ -1128,6 +1161,7 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
+      buzzDenial();
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);

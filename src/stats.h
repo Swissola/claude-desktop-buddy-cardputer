@@ -179,9 +179,14 @@ inline uint8_t statsFedProgress() {
 struct Settings {
   bool sound;
   bool bt;
-  bool wifi;      // placeholder — no WiFi stack linked yet, just stores the pref
+  bool wifi;           // placeholder — no WiFi stack linked yet, just stores the pref
   bool led;
   bool hud;
+  bool badge;          // BT/USB connection badge in transcript corner
+  bool showVelocity;   // median response time on pet stats page
+  bool showCountdown;  // remaining-time countdown on approval prompt
+  bool vibrate;        // haptic feedback master (requires Vibrator HAT)
+  bool vibrateOnDenial;
   uint8_t clockRot;  // 0=auto 1=portrait 2=landscape
 };
 
@@ -199,15 +204,20 @@ struct BoolSettingDef {
 // cleanly would require tearing down the BLE stack which the Arduino BLE
 // library doesn't do reliably.
 static const BoolSettingDef BOOL_SETTINGS[] = {
-  { "sound",      "s_snd",  &Settings::sound, true  },
-  { "bluetooth",  "s_bt",   &Settings::bt,    true  },
-  { "wifi",       "s_wifi", &Settings::wifi,  false },
-  { "led",        "s_led",  &Settings::led,   true  },
-  { "transcript", "s_hud",  &Settings::hud,   true  },
+  { "sound",      "s_snd",  &Settings::sound,          true  },
+  { "bluetooth",  "s_bt",   &Settings::bt,             true  },
+  { "wifi",       "s_wifi", &Settings::wifi,           false },
+  { "led",        "s_led",  &Settings::led,            true  },
+  { "transcript", "s_hud",  &Settings::hud,            true  },
+  { "badge",      "s_bdg",  &Settings::badge,          true  },
+  { "vel display","s_vel",  &Settings::showVelocity,   true  },
+  { "countdown",  "s_ctdn", &Settings::showCountdown,  true  },
+  { "vibrate",    "s_vib",  &Settings::vibrate,        false },
+  { "vib denial", "s_vibd", &Settings::vibrateOnDenial,true  },
 };
 static const uint8_t BOOL_SETTINGS_N = sizeof(BOOL_SETTINGS) / sizeof(BOOL_SETTINGS[0]);
 
-static Settings _settings = { true, true, false, true, true, 0 };
+static Settings _settings = { true, true, false, true, true, true, true, true, false, true, 0 };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
