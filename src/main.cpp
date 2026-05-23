@@ -1296,11 +1296,13 @@ void drawHUD() {
     spr.setCursor(HUD_X, H - AREA + 2 + i * LH);
     spr.print(disp[row]);
   }
-  if (msgScroll > 0) {
-    spr.setTextColor(p.body, p.bg);
-    spr.setCursor(W - 18, H - LH - 2);
-    spr.printf("-%u", msgScroll);
-  }
+  // Bottom-right corner: scroll offset takes priority; connection type fills
+  // the gap when not scrolled so the transport is always glanceable.
+  spr.setTextColor(p.body, p.bg);
+  spr.setCursor(W - 18, H - LH - 2);
+  if (msgScroll > 0)        spr.printf("-%u",  msgScroll);
+  else if (dataBtActive())  spr.print("BT");
+  else if (dataConnected()) spr.print("USB");
 }
 
 void setup() {
