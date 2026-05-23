@@ -1153,6 +1153,11 @@ static void drawPetStats(const Palette& p) {
   spr.setCursor(6, y + 20); spr.printf("napped   %luh%02lum", nap / 3600, (nap / 60) % 60);
   tokFmt("tokens   ", stats().tokens,   6, y + 30);
   tokFmt("today    ", tama.tokensToday, 6, y + 40);
+  uint16_t vel = statsMedianVelocity();
+  if (vel > 0) {
+    spr.setCursor(6, y + 50);
+    spr.printf("response %us", vel);
+  }
 #endif
 }
 
