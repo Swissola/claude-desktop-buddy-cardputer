@@ -179,21 +179,50 @@ inline uint8_t statsFedProgress() {
 struct Settings {
   bool sound;
   bool bt;
-  bool wifi;     // placeholder — no WiFi stack linked yet, just stores the pref
+  bool wifi;           // placeholder — no WiFi stack linked yet, just stores the pref
   bool led;
   bool hud;
+  bool badge;          // BT/USB connection badge in transcript corner
+  bool showVelocity;   // median response time on pet stats page
+  bool showCountdown;  // remaining-time countdown on approval prompt
+  bool vibrate;        // haptic feedback master (requires Vibrator HAT)
+  bool vibrateOnDenial;
   uint8_t clockRot;  // 0=auto 1=portrait 2=landscape
 };
 
-static Settings _settings = { true, true, false, true, true, 0 };
+// Descriptor for a bool setting. Drives load, save, menu label, and toggle
+// from a single definition — add a new bool setting here and it is
+// automatically wired everywhere. Non-bool settings (clockRot) stay explicit.
+struct BoolSettingDef {
+  const char*   label;   // menu display string
+  const char*   nvKey;   // NVS persistence key
+  bool Settings::*field; // pointer-to-member
+  bool          def;     // default value
+};
+
+// BT toggle is a stored preference only — BLE stays live. Turning BLE off
+// cleanly would require tearing down the BLE stack which the Arduino BLE
+// library doesn't do reliably.
+static const BoolSettingDef BOOL_SETTINGS[] = {
+  { "sound",      "s_snd",  &Settings::sound,          true  },
+  { "bluetooth",  "s_bt",   &Settings::bt,             true  },
+  { "wifi",       "s_wifi", &Settings::wifi,           false },
+  { "led",        "s_led",  &Settings::led,            true  },
+  { "transcript", "s_hud",  &Settings::hud,            true  },
+  { "badge",      "s_bdg",  &Settings::badge,          true  },
+  { "vel display","s_vel",  &Settings::showVelocity,   true  },
+  { "countdown",  "s_ctdn", &Settings::showCountdown,  true  },
+  { "vibrate",    "s_vib",  &Settings::vibrate,        false },
+  { "vib denial", "s_vibd", &Settings::vibrateOnDenial,true  },
+};
+static const uint8_t BOOL_SETTINGS_N = sizeof(BOOL_SETTINGS) / sizeof(BOOL_SETTINGS[0]);
+
+static Settings _settings = { true, true, false, true, true, true, true, true, false, true, 0 };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
-  _settings.sound = _prefs.getBool("s_snd", true);
-  _settings.bt    = _prefs.getBool("s_bt",  true);
-  _settings.wifi  = _prefs.getBool("s_wifi",false);
-  _settings.led   = _prefs.getBool("s_led", true);
-  _settings.hud      = _prefs.getBool("s_hud", true);
+  for (uint8_t i = 0; i < BOOL_SETTINGS_N; i++)
+    _settings.*BOOL_SETTINGS[i].field = _prefs.getBool(BOOL_SETTINGS[i].nvKey, BOOL_SETTINGS[i].def);
   _settings.clockRot = _prefs.getUChar("s_crot", 0);
   if (_settings.clockRot > 2) _settings.clockRot = 0;
   _prefs.end();
@@ -201,11 +230,8 @@ inline void settingsLoad() {
 
 inline void settingsSave() {
   _prefs.begin("buddy", false);
-  _prefs.putBool("s_snd", _settings.sound);
-  _prefs.putBool("s_bt",  _settings.bt);
-  _prefs.putBool("s_wifi",_settings.wifi);
-  _prefs.putBool("s_led", _settings.led);
-  _prefs.putBool("s_hud", _settings.hud);
+  for (uint8_t i = 0; i < BOOL_SETTINGS_N; i++)
+    _prefs.putBool(BOOL_SETTINGS[i].nvKey, _settings.*BOOL_SETTINGS[i].field);
   _prefs.putUChar("s_crot", _settings.clockRot);
   _prefs.end();
 }

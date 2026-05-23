@@ -23,7 +23,8 @@ static void startBt() {
 const int W = 135, H = 240;
 const int CX = W / 2;
 const int CY_BASE = 120;
-const int LED_PIN = 10;          // red LED, active-low
+const int LED_PIN   = 10;        // red LED, active-low
+const int VIBRO_PIN = 0;         // Vibrator HAT control (M5StickC Plus HAT G0)
 
 // Colors used across multiple UI surfaces
 const uint16_t HOT   = 0xFA20;   // red-orange: warnings, impatience, deny
@@ -86,6 +87,7 @@ const uint32_t SCREEN_OFF_MS = 30000;
 bool     napping = false;
 uint32_t napStartMs = 0;
 uint32_t promptArrivedMs = 0;
+static const uint32_t PROMPT_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 
 // Face-down = Z-axis dominant and negative. Debounced so a toss doesn't count.
 static bool isFaceDown() {
@@ -110,6 +112,28 @@ bool     responseSent = false;
 
 static void beep(uint16_t freq, uint16_t dur) {
   if (settings().sound) M5.Beep.tone(freq, dur);
+}
+
+static void vibroPulse(uint16_t ms) {
+  digitalWrite(VIBRO_PIN, HIGH);
+  delay(ms);
+  digitalWrite(VIBRO_PIN, LOW);
+}
+static void buzzPromptAwake() {
+  if (!settings().vibrate) return;
+  vibroPulse(100);
+}
+static void buzzPromptNapping() {  // long-short-long: harder to miss through a surface
+  if (!settings().vibrate) return;
+  vibroPulse(200); delay(80); vibroPulse(100); delay(80); vibroPulse(200);
+}
+static void buzzDenial() {
+  if (!settings().vibrate || !settings().vibrateOnDenial) return;
+  vibroPulse(50); delay(40); vibroPulse(50);
+}
+static void buzzLevelUp() {
+  if (!settings().vibrate) return;
+  vibroPulse(50); delay(40); vibroPulse(70); delay(40); vibroPulse(100);
 }
 
 static void sendCmd(const char* json) {
@@ -139,8 +163,9 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 10;
+// Menu layout: brightness(0), bool settings(1..BOOL_SETTINGS_N), clock rot, ascii pet, reset, back.
+// SETTINGS_N is derived so adding a bool to BOOL_SETTINGS automatically extends the menu.
+static const uint8_t SETTINGS_N = 1 + BOOL_SETTINGS_N + 4;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -151,28 +176,22 @@ static uint8_t  resetConfirmIdx = 0xFF;
 
 static void applySetting(uint8_t idx) {
   Settings& s = settings();
-  switch (idx) {
-    case 0:
-      brightLevel = (brightLevel + 1) % 5;
-      applyBrightness();
-      return;
-    case 1: s.sound = !s.sound; break;
-    case 2:
-      // BT toggle is a stored preference only — BLE stays live. Turning
-      // BLE off cleanly would require tearing down the BLE stack which
-      // the Arduino BLE library doesn't do reliably. If we need a
-      // hard-off someday, stop advertising via BLEDevice::getAdvertising().
-      s.bt = !s.bt;
-      break;
-    case 3: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
-    case 4: s.led = !s.led; break;
-    case 5: s.hud = !s.hud; break;
-    case 6: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 7: nextPet(); return;
-    case 8: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 9: settingsOpen = false; characterInvalidate(); return;
+  if (idx == 0) {
+    brightLevel = (brightLevel + 1) % 5;
+    applyBrightness();
+    return;
   }
-  settingsSave();
+  if (idx >= 1 && idx <= BOOL_SETTINGS_N) {
+    s.*BOOL_SETTINGS[idx - 1].field = !(s.*BOOL_SETTINGS[idx - 1].field);
+    settingsSave();
+    return;
+  }
+  switch (idx - 1 - BOOL_SETTINGS_N) {
+    case 0: s.clockRot = (s.clockRot + 1) % 3; settingsSave(); break;
+    case 1: nextPet(); break;
+    case 2: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; break;
+    case 3: settingsOpen = false; characterInvalidate(); break;
+  }
 }
 
 // Tap-twice confirm: first tap arms (label flips to "really?"), second
@@ -256,24 +275,27 @@ static void drawSettings() {
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
   spr.setTextSize(1);
   Settings& s = settings();
-  bool vals[] = { s.sound, s.bt, s.wifi, s.led, s.hud };
+  static const char* const CLOCK_ROT_NAMES[] = { "auto", "port", "land" };
+  static const char* const SPEC_LABELS[] = { "clock rot", "ascii pet", "reset", "back" };
   for (int i = 0; i < SETTINGS_N; i++) {
     bool sel = (i == settingsSel);
     spr.setTextColor(sel ? p.text : p.textDim, PANEL);
     spr.setCursor(mx + 6, my + 8 + i * 14);
     spr.print(sel ? "> " : "  ");
-    spr.print(settingsItems[i]);
+    if (i == 0)                              spr.print("brightness");
+    else if (i <= BOOL_SETTINGS_N)           spr.print(BOOL_SETTINGS[i - 1].label);
+    else                                     spr.print(SPEC_LABELS[i - 1 - BOOL_SETTINGS_N]);
     spr.setCursor(mx + mw - 36, my + 8 + i * 14);
     spr.setTextColor(p.textDim, PANEL);
     if (i == 0) {
       spr.printf("%u/4", brightLevel);
-    } else if (i >= 1 && i <= 5) {
-      spr.setTextColor(vals[i-1] ? GREEN : p.textDim, PANEL);
-      spr.print(vals[i-1] ? " on" : "off");
-    } else if (i == 6) {
-      static const char* const RN[] = { "auto", "port", "land" };
-      spr.print(RN[s.clockRot]);
-    } else if (i == 7) {
+    } else if (i >= 1 && i <= BOOL_SETTINGS_N) {
+      bool val = s.*BOOL_SETTINGS[i - 1].field;
+      spr.setTextColor(val ? GREEN : p.textDim, PANEL);
+      spr.print(val ? " on" : "off");
+    } else if (i == BOOL_SETTINGS_N + 1) {
+      spr.print(CLOCK_ROT_NAMES[s.clockRot]);
+    } else if (i == BOOL_SETTINGS_N + 2) {
       uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
       uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
       spr.printf("%u/%u", pos, total);
@@ -729,11 +751,18 @@ static void drawApproval() {
   spr.drawFastHLine(0, H - AREA, W, p.textDim);
 
   spr.setTextSize(1);
-  spr.setTextColor(p.textDim, p.bg);
   spr.setCursor(4, H - AREA + 4);
-  uint32_t waited = (millis() - promptArrivedMs) / 1000;
-  if (waited >= 10) spr.setTextColor(HOT, p.bg);
-  spr.printf("approve? %lus", (unsigned long)waited);
+  if (settings().showCountdown) {
+    uint32_t elapsed = millis() - promptArrivedMs;
+    uint32_t remaining = elapsed < PROMPT_TIMEOUT_MS ? PROMPT_TIMEOUT_MS - elapsed : 0;
+    uint32_t remSec = remaining / 1000;
+    spr.setTextColor(remSec < 30 ? HOT : p.textDim, p.bg);
+    if (remSec >= 60) spr.printf("approve? ~%um", remSec / 60);
+    else              spr.printf("approve? %us",   remSec);
+  } else {
+    spr.setTextColor(p.textDim, p.bg);
+    spr.print("approve?");
+  }
 
   // Size 2 only if it fits one line (~10 chars at 12px on 135px screen)
   int toolLen = strlen(tama.promptTool);
@@ -833,6 +862,13 @@ static void drawPetStats(const Palette& p) {
   };
   tokFmt("tokens   ", stats().tokens, y + 30);
   tokFmt("today    ", tama.tokensToday, y + 40);
+  if (settings().showVelocity) {
+    uint16_t vel = statsMedianVelocity();
+    if (vel > 0) {
+      spr.setCursor(6, y + 50);
+      spr.printf("response %us", vel);
+    }
+  }
 }
 
 static void drawPetHowTo(const Palette& p) {
@@ -928,11 +964,13 @@ void drawHUD() {
     spr.setCursor(4, H - AREA + 2 + i * LH);
     spr.print(disp[row]);
   }
-  if (msgScroll > 0) {
-    spr.setTextColor(p.body, p.bg);
-    spr.setCursor(W - 18, H - LH - 2);
-    spr.printf("-%u", msgScroll);
-  }
+  // Bottom-right corner: scroll offset takes priority; connection badge fills
+  // the gap when not scrolled so the transport is always glanceable.
+  spr.setTextColor(p.body, p.bg);
+  spr.setCursor(W - 18, H - LH - 2);
+  if (msgScroll > 0)                             spr.printf("-%u", msgScroll);
+  else if (settings().badge && dataBtActive())   spr.print("BT");
+  else if (settings().badge && dataConnected())  spr.print("USB");
 }
 
 void setup() {
@@ -943,6 +981,8 @@ void setup() {
   startBt();
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);   // off
+  pinMode(VIBRO_PIN, OUTPUT);
+  digitalWrite(VIBRO_PIN, LOW);  // off
   applyBrightness();
   lastInteractMs = millis();
   statsLoad();
@@ -992,7 +1032,7 @@ void loop() {
   uint32_t now = millis();
 
   dataPoll(&tama);
-  if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
+  if (statsPollLevelUp()) { triggerOneShot(P_CELEBRATE, 3000); buzzLevelUp(); }
   baseState = derive(tama);
 
   // After waking the screen, hold sleep for 12s so users see the wake-up
@@ -1027,7 +1067,8 @@ void loop() {
     if (tama.promptId[0]) {
       promptArrivedMs = millis();
       wake();
-      beep(1200, 80);   // alert chirp
+      beep(1200, 80);
+      if (napping) buzzPromptNapping(); else buzzPromptAwake();
       // Jump to the approval screen no matter what was open — drawApproval
       // only runs from drawHUD which only runs in DISP_NORMAL.
       displayMode = DISP_NORMAL;
@@ -1038,6 +1079,10 @@ void loop() {
     }
   }
 
+  if (tama.promptId[0] && !responseSent
+      && (millis() - promptArrivedMs) > PROMPT_TIMEOUT_MS) {
+    tama.promptId[0] = 0;
+  }
   bool inPrompt = tama.promptId[0] && !responseSent;
 
   // Button-press wake. Track which button woke the screen so its full
@@ -1116,6 +1161,7 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
+      buzzDenial();
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);
