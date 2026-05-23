@@ -1,3 +1,6 @@
+// Run via WSL (no Windows GCC required) from the project root:
+//   g++ -std=c++14 -Itest/stubs -Isrc test/test_stats/test_main.cpp test/stubs/unity.c -o /tmp/test_stats && /tmp/test_stats
+
 #include <unity.h>
 #include "stats.h"
 
