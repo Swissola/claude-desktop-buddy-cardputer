@@ -833,6 +833,11 @@ static void drawPetStats(const Palette& p) {
   };
   tokFmt("tokens   ", stats().tokens, y + 30);
   tokFmt("today    ", tama.tokensToday, y + 40);
+  uint16_t vel = statsMedianVelocity();
+  if (vel > 0) {
+    spr.setCursor(6, y + 50);
+    spr.printf("response %us", vel);
+  }
 }
 
 static void drawPetHowTo(const Palette& p) {
