@@ -13,7 +13,10 @@ struct TamaState {
   uint32_t lastUpdated;
   char     msg[24];
   bool     connected;
-  char     lines[8][92];
+  // Device can store up to 16 entries. The desktop bridge currently caps its
+  // "entries" array to 8, so only the first 8 slots will be used until the
+  // bridge is updated to send more. RAM cost: 16×92 = 1472 bytes, fine on ESP32.
+  char     lines[16][92];
   uint8_t  nLines;
   uint16_t lineGen;          // bumps when lines change — lets UI reset scroll
   char     promptId[40];     // pending permission request ID; empty = no prompt
@@ -103,7 +106,7 @@ static void _applyJson(const char* line, TamaState* out) {
   if (!la.isNull()) {
     uint8_t n = 0;
     for (JsonVariant v : la) {
-      if (n >= 8) break;
+      if (n >= 16) break;
       const char* s = v.as<const char*>();
       strncpy(out->lines[n], s ? s : "", 91); out->lines[n][91]=0;
       n++;
@@ -142,7 +145,10 @@ struct _LineBuf {
   }
 };
 
-static _LineBuf<1024> _usbLine, _btLine;
+// 2048 bytes gives headroom for 16 entries at ~80 bytes each plus JSON framing.
+// The bridge currently sends at most 8 entries, so the upper half is unused
+// until the bridge is updated to send more.
+static _LineBuf<2048> _usbLine, _btLine;
 
 inline void dataPoll(TamaState* out) {
   uint32_t now = millis();
