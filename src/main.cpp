@@ -137,6 +137,7 @@ const uint32_t SCREEN_OFF_MS = 120000;
 bool     napping = false;
 uint32_t napStartMs = 0;
 uint32_t promptArrivedMs = 0;
+static const uint32_t PROMPT_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 
 // Face-down = Z-axis dominant and negative. Debounced so a toss doesn't count.
 static bool isFaceDown() {
@@ -949,7 +950,9 @@ static uint8_t wrapInto(const char* in, char out[][24], uint8_t maxRows, uint8_t
 
 static void drawApproval() {
   const Palette& p = characterPalette();
-  uint32_t waited = (millis() - promptArrivedMs) / 1000;
+  uint32_t elapsed   = millis() - promptArrivedMs;
+  uint32_t remaining = elapsed < PROMPT_TIMEOUT_MS ? PROMPT_TIMEOUT_MS - elapsed : 0;
+  uint32_t remSec    = remaining / 1000;
 
 #ifdef CARDPUTER_ADV
   // Full-screen landscape approval — pet is suppressed in prompt mode,
@@ -957,9 +960,10 @@ static void drawApproval() {
   // centered line; the hint wraps at 38 chars (240 / 6).
   spr.fillSprite(p.bg);
   spr.setTextSize(1);
-  spr.setTextColor(waited >= 10 ? HOT : p.textDim, p.bg);
+  spr.setTextColor(remSec < 30 ? HOT : p.textDim, p.bg);
   spr.setCursor(4, 6);
-  spr.printf("approve?  %lus", (unsigned long)waited);
+  if (remSec >= 60) spr.printf("approve? ~%um", remSec / 60);
+  else              spr.printf("approve? %us",   remSec);
 
   int toolLen = strlen(tama.promptTool);
   spr.setTextColor(p.text, p.bg);
@@ -1001,10 +1005,10 @@ static void drawApproval() {
   spr.drawFastHLine(0, H - AREA, W, p.textDim);
 
   spr.setTextSize(1);
-  spr.setTextColor(p.textDim, p.bg);
   spr.setCursor(4, H - AREA + 4);
-  if (waited >= 10) spr.setTextColor(HOT, p.bg);
-  spr.printf("approve? %lus", (unsigned long)waited);
+  spr.setTextColor(remSec < 30 ? HOT : p.textDim, p.bg);
+  if (remSec >= 60) spr.printf("approve? ~%um", remSec / 60);
+  else              spr.printf("approve? %us",   remSec);
 
   // Size 2 only if it fits one line (~10 chars at 12px on 135px screen)
   int toolLen = strlen(tama.promptTool);
@@ -1420,6 +1424,10 @@ void loop() {
     }
   }
 
+  if (tama.promptId[0] && !responseSent
+      && (millis() - promptArrivedMs) > PROMPT_TIMEOUT_MS) {
+    tama.promptId[0] = 0;
+  }
   bool inPrompt = tama.promptId[0] && !responseSent;
 
 #ifdef CARDPUTER_ADV
