@@ -139,8 +139,9 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 10;
+// Menu layout: brightness(0), bool settings(1..BOOL_SETTINGS_N), clock rot, ascii pet, reset, back.
+// SETTINGS_N is derived so adding a bool to BOOL_SETTINGS automatically extends the menu.
+static const uint8_t SETTINGS_N = 1 + BOOL_SETTINGS_N + 4;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -151,28 +152,22 @@ static uint8_t  resetConfirmIdx = 0xFF;
 
 static void applySetting(uint8_t idx) {
   Settings& s = settings();
-  switch (idx) {
-    case 0:
-      brightLevel = (brightLevel + 1) % 5;
-      applyBrightness();
-      return;
-    case 1: s.sound = !s.sound; break;
-    case 2:
-      // BT toggle is a stored preference only — BLE stays live. Turning
-      // BLE off cleanly would require tearing down the BLE stack which
-      // the Arduino BLE library doesn't do reliably. If we need a
-      // hard-off someday, stop advertising via BLEDevice::getAdvertising().
-      s.bt = !s.bt;
-      break;
-    case 3: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
-    case 4: s.led = !s.led; break;
-    case 5: s.hud = !s.hud; break;
-    case 6: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 7: nextPet(); return;
-    case 8: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 9: settingsOpen = false; characterInvalidate(); return;
+  if (idx == 0) {
+    brightLevel = (brightLevel + 1) % 5;
+    applyBrightness();
+    return;
   }
-  settingsSave();
+  if (idx >= 1 && idx <= BOOL_SETTINGS_N) {
+    s.*BOOL_SETTINGS[idx - 1].field = !(s.*BOOL_SETTINGS[idx - 1].field);
+    settingsSave();
+    return;
+  }
+  switch (idx - 1 - BOOL_SETTINGS_N) {
+    case 0: s.clockRot = (s.clockRot + 1) % 3; settingsSave(); break;
+    case 1: nextPet(); break;
+    case 2: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; break;
+    case 3: settingsOpen = false; characterInvalidate(); break;
+  }
 }
 
 // Tap-twice confirm: first tap arms (label flips to "really?"), second
@@ -256,24 +251,27 @@ static void drawSettings() {
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
   spr.setTextSize(1);
   Settings& s = settings();
-  bool vals[] = { s.sound, s.bt, s.wifi, s.led, s.hud };
+  static const char* const CLOCK_ROT_NAMES[] = { "auto", "port", "land" };
+  static const char* const SPEC_LABELS[] = { "clock rot", "ascii pet", "reset", "back" };
   for (int i = 0; i < SETTINGS_N; i++) {
     bool sel = (i == settingsSel);
     spr.setTextColor(sel ? p.text : p.textDim, PANEL);
     spr.setCursor(mx + 6, my + 8 + i * 14);
     spr.print(sel ? "> " : "  ");
-    spr.print(settingsItems[i]);
+    if (i == 0)                              spr.print("brightness");
+    else if (i <= BOOL_SETTINGS_N)           spr.print(BOOL_SETTINGS[i - 1].label);
+    else                                     spr.print(SPEC_LABELS[i - 1 - BOOL_SETTINGS_N]);
     spr.setCursor(mx + mw - 36, my + 8 + i * 14);
     spr.setTextColor(p.textDim, PANEL);
     if (i == 0) {
       spr.printf("%u/4", brightLevel);
-    } else if (i >= 1 && i <= 5) {
-      spr.setTextColor(vals[i-1] ? GREEN : p.textDim, PANEL);
-      spr.print(vals[i-1] ? " on" : "off");
-    } else if (i == 6) {
-      static const char* const RN[] = { "auto", "port", "land" };
-      spr.print(RN[s.clockRot]);
-    } else if (i == 7) {
+    } else if (i >= 1 && i <= BOOL_SETTINGS_N) {
+      bool val = s.*BOOL_SETTINGS[i - 1].field;
+      spr.setTextColor(val ? GREEN : p.textDim, PANEL);
+      spr.print(val ? " on" : "off");
+    } else if (i == BOOL_SETTINGS_N + 1) {
+      spr.print(CLOCK_ROT_NAMES[s.clockRot]);
+    } else if (i == BOOL_SETTINGS_N + 2) {
       uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
       uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
       spr.printf("%u/%u", pos, total);
