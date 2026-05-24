@@ -101,8 +101,11 @@ static void _applyJson(const char* line, TamaState* out) {
   if (m) { strncpy(out->msg, m, sizeof(out->msg)-1); out->msg[sizeof(out->msg)-1]=0; }
   JsonArray la = doc["entries"];
   if (!la.isNull()) {
+    uint8_t total = (uint8_t)la.size();
+    uint8_t skip = total > 8 ? total - 8 : 0;
     uint8_t n = 0;
     for (JsonVariant v : la) {
+      if (skip > 0) { skip--; continue; }
       if (n >= 8) break;
       const char* s = v.as<const char*>();
       strncpy(out->lines[n], s ? s : "", 91); out->lines[n][91]=0;
@@ -178,6 +181,7 @@ inline void dataPoll(TamaState* out) {
   if (!out->connected) {
     out->sessionsTotal=0; out->sessionsRunning=0; out->sessionsWaiting=0;
     out->recentlyCompleted=false; out->lastUpdated=now;
+    out->nLines=0; out->promptId[0]=0; out->promptTool[0]=0; out->promptHint[0]=0;
     strncpy(out->msg, "No Claude connected", sizeof(out->msg)-1);
     out->msg[sizeof(out->msg)-1]=0;
   }
