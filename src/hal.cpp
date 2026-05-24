@@ -124,10 +124,17 @@ void  halScreenPower(bool on) {
 }
 void  halPowerOff()          { M5.Power.powerOff(); }
 float halBatteryVolts()      { return M5.Power.getBatteryVoltage() / 1000.0f; }
-float halBatteryMilliAmps()  { return 0.0f; }   // not exposed on Cardputer
 // M5.Power.isCharging(): -1 = discharging (on battery), 0 = USB but full,
 // 1 = actively charging. Treat anything ≥ 0 as "USB plugged in" so the
 // charging-clock face still shows when the battery has topped off.
+// The Cardputer has no current-sense hardware, so return a synthetic value
+// that makes the charging/full/discharging UI states work correctly.
+float halBatteryMilliAmps() {
+  int8_t c = M5.Power.isCharging();
+  if (c > 0)  return  200.0f;  // actively charging — positive convention
+  if (c == 0) return    0.0f;  // USB, full
+  return -50.0f;               // on battery, nominal draw
+}
 float halVbusVolts()         { return M5.Power.isCharging() >= 0 ? 5.0f : 0.0f; }
 int   halTempC()             { return 25; }     // no temp sensor on S3 accessible here
 uint8_t halPowerBtnPress()   { return 0; }      // no dedicated power button

@@ -685,15 +685,31 @@ static void _infoHeader(const Palette& p, int& y, const char* section, uint8_t p
 void drawPasskey() {
   const Palette& p = characterPalette();
   spr.fillSprite(p.bg);
+  char b[8]; snprintf(b, sizeof(b), "%06lu", (unsigned long)blePasskey());
+#ifdef CARDPUTER_ADV
+  // Landscape 240×135 — centre everything vertically within the display.
+  spr.setTextSize(1);
+  spr.setTextColor(p.textDim, p.bg);
+  spr.setTextDatum(TC_DATUM);
+  spr.drawString("BLUETOOTH PAIRING", CX, 14);
+  spr.setTextSize(3);
+  spr.setTextColor(p.text, p.bg);
+  spr.drawString(b, CX, 52);
+  spr.setTextSize(1);
+  spr.setTextColor(p.textDim, p.bg);
+  spr.drawString("enter on desktop", CX, 108);
+  spr.setTextDatum(TL_DATUM);
+#else
+  // Portrait 135×240.
   spr.setTextSize(1);
   spr.setTextColor(p.textDim, p.bg);
   spr.setCursor(8, 56);  spr.print("BLUETOOTH PAIRING");
   spr.setCursor(8, 184); spr.print("enter on desktop:");
   spr.setTextSize(3);
   spr.setTextColor(p.text, p.bg);
-  char b[8]; snprintf(b, sizeof(b), "%06lu", (unsigned long)blePasskey());
   spr.setCursor((W - 18 * 6) / 2, 110);
   spr.print(b);
+#endif
 }
 
 void drawInfo() {
