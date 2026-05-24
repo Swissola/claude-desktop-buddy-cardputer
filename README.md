@@ -66,6 +66,19 @@ first connect; grant it.
 
 Once paired, the bridge auto-reconnects whenever both sides are awake.
 
+## Connecting without Claude for Desktop
+
+[cc-buddy-bridge](https://github.com/SnowWarri0r/cc-buddy-bridge) is a
+community Python CLI (uses [bleak](https://github.com/hbldh/bleak)) that
+speaks the same BLE protocol. It lets you feed live Claude Code session data
+to the stick from any machine that can run Python — useful if you're on Linux,
+or just prefer a terminal workflow over the desktop app.
+
+> **Note for cc-buddy-bridge users:** this fork's transcript buffer holds
+> 16 entries (upstream cap is 8). If you update `state.py`'s entry cap from
+> 8 to 16 you'll see the full window; otherwise the oldest 8 are silently
+> discarded by the bridge before they reach the device.
+
 If discovery isn't finding the stick:
 
 - Make sure it's awake (any button press)
