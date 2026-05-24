@@ -27,16 +27,39 @@ const int LED_PIN      = 10;     // red LED, active-low
 const int VIBRATE_PIN  = 26;     // Vibration HAT ERM motor, PWM
 const int VIBRATE_CH   = 0;      // LEDC channel
 
-static uint32_t vibrateUntil = 0;
+// Patterns: alternating on/off durations in ms. Even indices = motor on,
+// odd = motor off. Zero-terminated. Mirror the buzzer's character:
+//   attention  — two sharp pulses (mirrors 1200Hz alert chirp)
+//   approve    — single crisp tap  (mirrors high 2400Hz confirm beep)
+//   deny       — single heavy thud (mirrors low 600Hz deny tone)
+//   celebrate  — three quick bursts (fills the gap — buzzer is silent here)
+static const uint16_t PAT_ATTENTION[] = { 80, 70, 80, 0 };
+static const uint16_t PAT_APPROVE[]   = { 40, 0 };
+static const uint16_t PAT_DENY[]      = { 150, 0 };
+static const uint16_t PAT_CELEBRATE[] = { 60, 50, 60, 50, 60, 0 };
 
-static void vibrateFor(uint16_t durMs) {
+static const uint16_t* _vibPat  = nullptr;
+static uint8_t         _vibStep = 0;
+static uint32_t        _vibNext = 0;
+
+static void vibratePattern(const uint16_t* pat) {
   if (!settings().vibrate) return;
-  ledcWrite(VIBRATE_CH, 200);    // ~78% duty — strong but not max
-  vibrateUntil = millis() + durMs;
+  _vibPat  = pat;
+  _vibStep = 0;
+  _vibNext = millis();  // start immediately
 }
 
-static void vibrateStop() {
-  ledcWrite(VIBRATE_CH, 0);
+// Call once per loop() — advances the pattern state machine.
+static void vibrateTick(uint32_t now) {
+  if (!_vibPat) return;
+  if ((int32_t)(now - _vibNext) < 0) return;
+  if (_vibPat[_vibStep] == 0) {
+    ledcWrite(VIBRATE_CH, 0);
+    _vibPat = nullptr;
+    return;
+  }
+  ledcWrite(VIBRATE_CH, (_vibStep % 2 == 0) ? 200 : 0);
+  _vibNext = now + _vibPat[_vibStep++];
 }
 
 // Colors used across multiple UI surfaces
@@ -1027,19 +1050,13 @@ void loop() {
     digitalWrite(LED_PIN, HIGH);
   }
 
-  // Vibration HAT: buzz on state entry, stop when timer expires
+  // Vibration HAT: fire pattern on state entry, tick the player each loop
   if (activeState != prevActive) {
-    if (activeState == P_ATTENTION) {
-      vibrateFor(400);            // short pulse — prompt has arrived
-    } else if (activeState == P_CELEBRATE) {
-      vibrateFor(600);            // slightly longer — celebratory
-    }
+    if (activeState == P_ATTENTION) vibratePattern(PAT_ATTENTION);
+    else if (activeState == P_CELEBRATE)  vibratePattern(PAT_CELEBRATE);
     prevActive = activeState;
   }
-  if (vibrateUntil && (int32_t)(now - vibrateUntil) >= 0) {
-    vibrateStop();
-    vibrateUntil = 0;
-  }
+  vibrateTick(now);
 
   // shake → dizzy + force scenario advance
   if (now - lastShakeCheck > 50) {
@@ -1117,6 +1134,7 @@ void loop() {
         uint32_t tookS = (millis() - promptArrivedMs) / 1000;
         statsOnApproval(tookS);
         beep(2400, 60);
+        vibratePattern(PAT_APPROVE);
         if (tookS < 5) triggerOneShot(P_HEART, 2000);
       } else if (resetOpen) {
         beep(1800, 30);
@@ -1149,6 +1167,7 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
+      vibratePattern(PAT_DENY);
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);
