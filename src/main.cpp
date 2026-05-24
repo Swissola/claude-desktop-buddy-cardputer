@@ -21,6 +21,9 @@ static void startBt() {
 #include "character.h"
 #include "stats.h"
 #ifdef CARDPUTER_ADV
+#include "glass2.h"
+#endif
+#ifdef CARDPUTER_ADV
 // Cardputer's 1.14" TFT is 240x135 native landscape. UI runs at rotation 1
 // so the keyboard is on the bottom; every coord in this file that
 // references H (e.g. clock baselines, modal centering, nap dim) now
@@ -54,6 +57,10 @@ TamaState    tama;
 PersonaState baseState   = P_SLEEP;
 PersonaState activeState = P_SLEEP;
 uint32_t     oneShotUntil = 0;
+#ifdef CARDPUTER_ADV
+static PersonaState _g2PrevState = P_SLEEP;
+static bool         _g2PrevPrompt = false;
+#endif
 uint32_t     lastShakeCheck = 0;
 float        accelBaseline = 1.0f;
 unsigned long t = 0;
@@ -1291,6 +1298,9 @@ void drawHUD() {
 void setup() {
   halInit();
   M5.Lcd.setRotation(HOME_ROTATION);
+#ifdef CARDPUTER_ADV
+  glass2Init();
+#endif
   halImuInit();
   halBeepInit();
   startBt();
@@ -1331,6 +1341,13 @@ void setup() {
     }
     spr.setTextDatum(TL_DATUM); spr.setTextSize(1);
     spr.pushSprite(0, 0);
+#ifdef CARDPUTER_ADV
+    {
+      char l2[32];
+      snprintf(l2, sizeof(l2), "pet: %s", petName());
+      glass2Show("Claude Code Buddy", l2, "connecting...", "");
+    }
+#endif
     delay(1800);
   }
 
@@ -1393,6 +1410,26 @@ void loop() {
   }
 
   bool inPrompt = tama.promptId[0] && !responseSent;
+
+#ifdef CARDPUTER_ADV
+  // Update Glass2 Grove OLED whenever state or prompt status changes.
+  if (activeState != _g2PrevState || inPrompt != _g2PrevPrompt) {
+    _g2PrevState  = activeState;
+    _g2PrevPrompt = inPrompt;
+    if (inPrompt) {
+      char hint[22];
+      strncpy(hint, tama.promptHint, 21); hint[21] = 0;
+      glass2Show("APPROVE?", tama.promptTool[0] ? tama.promptTool : "tool call",
+                 hint[0] ? hint : "", "A=yes  B=no");
+    } else {
+      char l4[22];
+      snprintf(l4, sizeof(l4), "lv%u  %lutok", stats().level,
+               (unsigned long)stats().tokens);
+      glass2Show(petName()[0] ? petName() : "Buddy",
+                 stateNames[activeState], tama.msg[0] ? tama.msg : "", l4);
+    }
+  }
+#endif
 
   // Button-press wake. Track which button woke the screen so its full
   // press cycle (including long-press) is swallowed — you don't want
