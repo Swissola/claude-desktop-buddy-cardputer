@@ -928,7 +928,7 @@ static uint8_t wrapInto(const char* in, char out[][24], uint8_t maxRows, uint8_t
     }
     memcpy(&out[row][col], w, wlen); col += wlen;
   }
-  if (col > 0 && row < maxRows) { out[row][col] = 0; row++; }
+  if (col > 0 && row < maxRows) { if (col < width) out[row][col] = 0; row++; }
   return row;
 }
 
