@@ -314,9 +314,10 @@ void _pollKeyEvents() {
         case '/': k = HalKey::Right;   break;
         case 'y': case 'Y': k = HalKey::Approve; break;
         case 'n': case 'N': k = HalKey::Deny;    break;
-        case 'm': case 'M': k = HalKey::Menu;    break;
-        case 'g': case 'G': k = HalKey::Demo;    break;
-        case '`':           k = HalKey::Back;    break;  // physical Esc position
+        case 'm': case 'M': k = HalKey::Menu;      break;
+        case 'g': case 'G': k = HalKey::Demo;      break;
+        case 'e': case 'E': k = HalKey::ToggleEmo; break;
+        case '`':           k = HalKey::Back;      break;  // physical Esc position
       }
       if (k != HalKey::None) _pushKey(k);
     }

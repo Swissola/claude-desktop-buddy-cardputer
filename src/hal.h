@@ -135,5 +135,6 @@ enum class HalKey : uint8_t {
   Back,          // Esc (backtick) / Del / Backspace — close modal
   Menu,          // m
   Demo,          // g
+  ToggleEmo,     // e — toggle emotion faces
 };
 HalKey halPollKey();

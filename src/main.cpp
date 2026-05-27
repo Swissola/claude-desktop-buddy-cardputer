@@ -20,6 +20,9 @@ static void startBt() {
 
 #include "character.h"
 #include "stats.h"
+#include "emotion.h"
+
+EmotionRenderer emotionRenderer;
 #ifdef CARDPUTER_ADV
 #include "glass2.h"
 #endif
@@ -234,8 +237,8 @@ const uint8_t MENU_N = 7;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 10;
+const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "emotions", "reset", "back" };
+const uint8_t SETTINGS_N = 11;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -269,8 +272,9 @@ static void applySetting(uint8_t idx) {
     case 5: s.hud = !s.hud; break;
     case 6: s.clockRot = (s.clockRot + 1) % 3; break;
     case 7: nextPet(); return;
-    case 8: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 9: settingsOpen = false; characterInvalidate(); return;
+    case 8: s.emotionFaces = !s.emotionFaces; break;
+    case 9: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
+    case 10: settingsOpen = false; characterInvalidate(); return;
   }
   settingsSave();
 }
@@ -390,6 +394,9 @@ static void drawSettings() {
       uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
       uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
       spr.printf("%u/%u", pos, total);
+    } else if (i == 8) {
+      spr.setTextColor(s.emotionFaces ? GREEN : p.textDim, PANEL);
+      spr.print(s.emotionFaces ? " on" : "off");
     }
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
@@ -770,7 +777,8 @@ void drawInfo() {
     spr.setTextColor(p.text, p.bg);    ln("Y  N   approve / deny");
     spr.setTextColor(p.textDim, p.bg); ln("       on a pending prompt"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("M      open menu");
-    spr.setTextColor(p.textDim, p.bg); ln("G      toggle demo mode"); y += 4;
+    spr.setTextColor(p.textDim, p.bg); ln("G      toggle demo mode");
+    spr.setTextColor(p.textDim, p.bg); ln("E      toggle emotion faces"); y += 4;
     spr.setTextColor(p.textDim, p.bg); ln("Power: slide switch on side");
 #else
     spr.setTextColor(p.text, p.bg);    ln("A   front");
@@ -1311,6 +1319,7 @@ void setup() {
   settingsLoad();
   petNameLoad();
   buddyInit();
+  emotionRenderer.init();
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.createSprite(W, H);
@@ -1425,8 +1434,20 @@ void loop() {
       char l4[22];
       snprintf(l4, sizeof(l4), "lv%u  %lutok", stats().level,
                (unsigned long)stats().tokens);
+      static const char* const emotionNames[] = {
+        "idle", "thinking", "working", "bash", "read", "write",
+        "success", "error", "sleepy"
+      };
+      char l2[22];
+      if (settings().emotionFaces && buddyMode) {
+        Emotion cur = emotionRenderer.getCurrent();
+        snprintf(l2, sizeof(l2), "%s/%s", stateNames[activeState],
+                 cur < EMOTION_COUNT ? emotionNames[cur] : "");
+      } else {
+        snprintf(l2, sizeof(l2), "%s", stateNames[activeState]);
+      }
       glass2Show(petName()[0] ? petName() : "Buddy",
-                 stateNames[activeState], tama.msg[0] ? tama.msg : "", l4);
+                 l2, tama.msg[0] ? tama.msg : "", l4);
     }
   }
 #endif
@@ -1640,6 +1661,11 @@ void loop() {
         dataSetDemo(!dataDemo());
         sfxConfirm();
         break;
+      case HalKey::ToggleEmo:
+        settings().emotionFaces = !settings().emotionFaces;
+        settingsSave();
+        sfxConfirm();
+        break;
       case HalKey::Left:
         if      (displayMode == DISP_INFO) infoPage = (infoPage + INFO_PAGES - 1) % INFO_PAGES;
         else if (displayMode == DISP_PET)  petPage  = (petPage  + PET_PAGES  - 1) % PET_PAGES;
@@ -1729,6 +1755,19 @@ void loop() {
     // full-screen info (Cardputer).
   } else if (buddyMode) {
     buddyTick(activeState);
+    if (settings().emotionFaces) {
+      Emotion emo;
+      if (!bleConnected())                 emo = EMOTION_SLEEPY;
+      else if (tama.promptId[0])           emo = inferEmotionFromTool(tama.promptTool);
+      else if (activeState == P_CELEBRATE) emo = EMOTION_SUCCESS;
+      else if (activeState == P_DIZZY)     emo = EMOTION_ERROR;
+      else if (tama.sessionsRunning > 0)   emo = EMOTION_WORKING;
+      else if (tama.sessionsWaiting > 0)   emo = EMOTION_THINKING;
+      else                                 emo = EMOTION_IDLE;
+      emotionRenderer.setEmotion(emo);
+      emotionRenderer.tick(millis());
+      emotionRenderer.renderTo(&spr, 185, 42);
+    }
   } else if (characterLoaded()) {
     characterSetState(activeState);
     characterTick();
