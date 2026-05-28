@@ -20,9 +20,7 @@ static void startBt() {
 
 #include "character.h"
 #include "stats.h"
-#include "emotion.h"
 
-EmotionRenderer emotionRenderer;
 const int W = 135, H = 240;
 const int CX = W / 2;
 const int CY_BASE = 120;
@@ -180,8 +178,8 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "emotions", "reset", "back" };
-const uint8_t SETTINGS_N = 12;
+const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
+const uint8_t SETTINGS_N = 11;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -211,9 +209,8 @@ static void applySetting(uint8_t idx) {
     case 6: s.hud = !s.hud; break;
     case 7: s.clockRot = (s.clockRot + 1) % 3; break;
     case 8: nextPet(); return;
-    case 9:  s.emotionFaces = !s.emotionFaces; break;
-    case 10: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 11: settingsOpen = false; characterInvalidate(); return;
+    case 9:  resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
+    case 10: settingsOpen = false; characterInvalidate(); return;
   }
   settingsSave();
 }
@@ -320,9 +317,6 @@ static void drawSettings() {
       uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
       uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
       spr.printf("%u/%u", pos, total);
-    } else if (i == 9) {
-      spr.setTextColor(s.emotionFaces ? GREEN : p.textDim, PANEL);
-      spr.print(s.emotionFaces ? " on" : "off");
     }
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
@@ -998,7 +992,6 @@ void setup() {
   settingsLoad();
   petNameLoad();
   buddyInit();
-  emotionRenderer.init();
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.createSprite(W, H);
@@ -1250,19 +1243,6 @@ void loop() {
     // (which draws direct-to-LCD below)
   } else if (buddyMode) {
     buddyTick(activeState);
-    if (settings().emotionFaces) {
-      Emotion emo;
-      if (!bleConnected())                 emo = EMOTION_SLEEPY;
-      else if (tama.promptId[0])           emo = inferEmotionFromTool(tama.promptTool);
-      else if (activeState == P_CELEBRATE) emo = EMOTION_SUCCESS;
-      else if (activeState == P_DIZZY)     emo = EMOTION_ERROR;
-      else if (tama.sessionsRunning > 0)   emo = EMOTION_WORKING;
-      else if (tama.sessionsWaiting > 0)   emo = EMOTION_THINKING;
-      else                                 emo = EMOTION_IDLE;
-      emotionRenderer.setEmotion(emo);
-      emotionRenderer.tick(millis());
-      emotionRenderer.renderTo(nullptr, 42, 95);
-    }
   } else if (characterLoaded()) {
     characterSetState(activeState);
     characterTick();
