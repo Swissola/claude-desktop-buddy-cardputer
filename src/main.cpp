@@ -20,10 +20,50 @@ static void startBt() {
 
 #include "character.h"
 #include "stats.h"
+#include "emotion.h"
+
+EmotionRenderer emotionRenderer;
 const int W = 135, H = 240;
 const int CX = W / 2;
 const int CY_BASE = 120;
-const int LED_PIN = 10;          // red LED, active-low
+const int LED_PIN      = 10;     // red LED, active-low
+const int VIBRATE_PIN  = 26;     // Vibration HAT ERM motor, PWM
+const int VIBRATE_CH   = 0;      // LEDC channel
+
+// Patterns: alternating on/off durations in ms. Even indices = motor on,
+// odd = motor off. Zero-terminated. Mirror the buzzer's character:
+//   attention  — two sharp pulses (mirrors 1200Hz alert chirp)
+//   approve    — single crisp tap  (mirrors high 2400Hz confirm beep)
+//   deny       — single heavy thud (mirrors low 600Hz deny tone)
+//   celebrate  — three quick bursts (fills the gap — buzzer is silent here)
+static const uint16_t PAT_ATTENTION[] = { 80, 70, 80, 0 };
+static const uint16_t PAT_APPROVE[]   = { 40, 0 };
+static const uint16_t PAT_DENY[]      = { 150, 0 };
+static const uint16_t PAT_CELEBRATE[] = { 60, 50, 60, 50, 60, 0 };
+
+static const uint16_t* _vibPat  = nullptr;
+static uint8_t         _vibStep = 0;
+static uint32_t        _vibNext = 0;
+
+static void vibratePattern(const uint16_t* pat) {
+  if (!settings().vibrate) return;
+  _vibPat  = pat;
+  _vibStep = 0;
+  _vibNext = millis();  // start immediately
+}
+
+// Call once per loop() — advances the pattern state machine.
+static void vibrateTick(uint32_t now) {
+  if (!_vibPat) return;
+  if ((int32_t)(now - _vibNext) < 0) return;
+  if (_vibPat[_vibStep] == 0) {
+    ledcWrite(VIBRATE_CH, 0);
+    _vibPat = nullptr;
+    return;
+  }
+  ledcWrite(VIBRATE_CH, (_vibStep % 2 == 0) ? 200 : 0);
+  _vibNext = now + _vibPat[_vibStep++];
+}
 
 // Colors used across multiple UI surfaces
 const uint16_t HOT   = 0xFA20;   // red-orange: warnings, impatience, deny
@@ -33,8 +73,9 @@ enum PersonaState { P_SLEEP, P_IDLE, P_BUSY, P_ATTENTION, P_CELEBRATE, P_DIZZY, 
 const char* stateNames[] = { "sleep", "idle", "busy", "attention", "celebrate", "dizzy", "heart" };
 
 TamaState    tama;
-PersonaState baseState   = P_SLEEP;
-PersonaState activeState = P_SLEEP;
+PersonaState baseState    = P_SLEEP;
+PersonaState activeState  = P_SLEEP;
+PersonaState prevActive   = P_SLEEP;
 uint32_t     oneShotUntil = 0;
 uint32_t     lastShakeCheck = 0;
 float        accelBaseline = 1.0f;
@@ -139,8 +180,8 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 10;
+const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "emotions", "reset", "back" };
+const uint8_t SETTINGS_N = 12;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -156,21 +197,23 @@ static void applySetting(uint8_t idx) {
       brightLevel = (brightLevel + 1) % 5;
       applyBrightness();
       return;
-    case 1: s.sound = !s.sound; break;
-    case 2:
+    case 1: s.sound   = !s.sound;   break;
+    case 2: s.vibrate = !s.vibrate; break;
+    case 3:
       // BT toggle is a stored preference only — BLE stays live. Turning
       // BLE off cleanly would require tearing down the BLE stack which
       // the Arduino BLE library doesn't do reliably. If we need a
       // hard-off someday, stop advertising via BLEDevice::getAdvertising().
       s.bt = !s.bt;
       break;
-    case 3: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
-    case 4: s.led = !s.led; break;
-    case 5: s.hud = !s.hud; break;
-    case 6: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 7: nextPet(); return;
-    case 8: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 9: settingsOpen = false; characterInvalidate(); return;
+    case 4: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
+    case 5: s.led = !s.led; break;
+    case 6: s.hud = !s.hud; break;
+    case 7: s.clockRot = (s.clockRot + 1) % 3; break;
+    case 8: nextPet(); return;
+    case 9:  s.emotionFaces = !s.emotionFaces; break;
+    case 10: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
+    case 11: settingsOpen = false; characterInvalidate(); return;
   }
   settingsSave();
 }
@@ -256,7 +299,7 @@ static void drawSettings() {
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
   spr.setTextSize(1);
   Settings& s = settings();
-  bool vals[] = { s.sound, s.bt, s.wifi, s.led, s.hud };
+  bool vals[] = { s.sound, s.vibrate, s.bt, s.wifi, s.led, s.hud };
   for (int i = 0; i < SETTINGS_N; i++) {
     bool sel = (i == settingsSel);
     spr.setTextColor(sel ? p.text : p.textDim, PANEL);
@@ -267,16 +310,19 @@ static void drawSettings() {
     spr.setTextColor(p.textDim, PANEL);
     if (i == 0) {
       spr.printf("%u/4", brightLevel);
-    } else if (i >= 1 && i <= 5) {
+    } else if (i >= 1 && i <= 6) {
       spr.setTextColor(vals[i-1] ? GREEN : p.textDim, PANEL);
       spr.print(vals[i-1] ? " on" : "off");
-    } else if (i == 6) {
+    } else if (i == 7) {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
-    } else if (i == 7) {
+    } else if (i == 8) {
       uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
       uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
       spr.printf("%u/%u", pos, total);
+    } else if (i == 9) {
+      spr.setTextColor(s.emotionFaces ? GREEN : p.textDim, PANEL);
+      spr.print(s.emotionFaces ? " on" : "off");
     }
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
@@ -943,12 +989,16 @@ void setup() {
   startBt();
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);   // off
+  ledcSetup(VIBRATE_CH, 500, 8); // 500 Hz, 8-bit resolution
+  ledcAttachPin(VIBRATE_PIN, VIBRATE_CH);
+  ledcWrite(VIBRATE_CH, 0);      // off
   applyBrightness();
   lastInteractMs = millis();
   statsLoad();
   settingsLoad();
   petNameLoad();
   buddyInit();
+  emotionRenderer.init();
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.createSprite(W, H);
@@ -1007,6 +1057,14 @@ void loop() {
   } else {
     digitalWrite(LED_PIN, HIGH);
   }
+
+  // Vibration HAT: fire pattern on state entry, tick the player each loop
+  if (activeState != prevActive) {
+    if (activeState == P_ATTENTION) vibratePattern(PAT_ATTENTION);
+    else if (activeState == P_CELEBRATE)  vibratePattern(PAT_CELEBRATE);
+    prevActive = activeState;
+  }
+  vibrateTick(now);
 
   // shake → dizzy + force scenario advance
   if (now - lastShakeCheck > 50) {
@@ -1084,6 +1142,7 @@ void loop() {
         uint32_t tookS = (millis() - promptArrivedMs) / 1000;
         statsOnApproval(tookS);
         beep(2400, 60);
+        vibratePattern(PAT_APPROVE);
         if (tookS < 5) triggerOneShot(P_HEART, 2000);
       } else if (resetOpen) {
         beep(1800, 30);
@@ -1116,6 +1175,7 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
+      vibratePattern(PAT_DENY);
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);
@@ -1190,6 +1250,19 @@ void loop() {
     // (which draws direct-to-LCD below)
   } else if (buddyMode) {
     buddyTick(activeState);
+    if (settings().emotionFaces) {
+      Emotion emo;
+      if (!bleConnected())                 emo = EMOTION_SLEEPY;
+      else if (tama.promptId[0])           emo = inferEmotionFromTool(tama.promptTool);
+      else if (activeState == P_CELEBRATE) emo = EMOTION_SUCCESS;
+      else if (activeState == P_DIZZY)     emo = EMOTION_ERROR;
+      else if (tama.sessionsRunning > 0)   emo = EMOTION_WORKING;
+      else if (tama.sessionsWaiting > 0)   emo = EMOTION_THINKING;
+      else                                 emo = EMOTION_IDLE;
+      emotionRenderer.setEmotion(emo);
+      emotionRenderer.tick(millis());
+      emotionRenderer.renderTo(nullptr, 42, 95);
+    }
   } else if (characterLoaded()) {
     characterSetState(activeState);
     characterTick();
