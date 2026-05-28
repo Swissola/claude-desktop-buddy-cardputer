@@ -120,7 +120,7 @@ static void nextPet() {
   if (buddyMode) buddyInvalidate();
 }
 uint32_t wakeTransitionUntil = 0;
-const uint32_t SCREEN_OFF_MS = 30000;
+const uint32_t SCREEN_OFF_MS = 15000;
 
 bool     napping = false;
 uint32_t napStartMs = 0;
@@ -935,7 +935,7 @@ void drawHUD() {
   spr.fillRect(0, H - AREA, W, AREA, p.bg);
   spr.setTextSize(1);
 
-  if (tama.lineGen != lastLineGen) { msgScroll = 0; lastLineGen = tama.lineGen; wake(); }
+  if (tama.lineGen != lastLineGen) { msgScroll = 0; lastLineGen = tama.lineGen; }
 
   if (tama.nLines == 0) {
     spr.setTextColor(p.text, p.bg);
