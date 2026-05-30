@@ -1324,8 +1324,9 @@ void loop() {
 
   // millis() not the cached `now`: wake() runs after `now` is captured,
   // so now - lastInteractMs underflows when a button is held → flicker.
-  // No auto-off on USB power — clock face wants to stay visible while charging.
-  if (!screenOff && !inPrompt && !_onUsb
+  // No auto-off on USB power with data — clock face wants to stay visible when
+  // connected to a PC. Wall charger/power bank (USB power, no data) times out normally.
+  if (!screenOff && !inPrompt && !(_onUsb && dataConnected())
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     M5.Axp.SetLDO2(false);
     screenOff = true;
