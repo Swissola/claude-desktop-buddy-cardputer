@@ -120,11 +120,16 @@ static void nextPet() {
   if (buddyMode) buddyInvalidate();
 }
 uint32_t wakeTransitionUntil = 0;
-const uint32_t SCREEN_OFF_MS = 15000;
+const uint32_t SCREEN_OFF_MS    = 15000;
+const uint32_t BLE_IDLE_MS      = 1UL * 60UL * 1000UL;   // TEST: 1 min (change to 30UL before release)
+const uint32_t IMU_POLL_IDLE_MS = 500;   // IMU check interval when screen off
 
 bool     napping = false;
 uint32_t napStartMs = 0;
 uint32_t promptArrivedMs = 0;
+static uint32_t screenOffSinceMs = 0;    // millis() when screen last turned off
+static bool     bleIdleSleep     = false; // true = BLE disconnected for idle power save
+static uint32_t lastImuCheck     = 0;
 
 // Face-down = Z-axis dominant and negative. Debounced so a toss doesn't count.
 static bool isFaceDown() {
@@ -142,6 +147,8 @@ static void wake() {
     M5.Axp.SetLDO2(true);
     applyBrightness();
     screenOff = false;
+    screenOffSinceMs = 0;
+    bleIdleSleep = false;
     wakeTransitionUntil = millis() + 12000;
   }
   if (dimmed) { applyBrightness(); dimmed = false; }
@@ -1304,7 +1311,8 @@ void loop() {
   // Exit needs sustained not-down so IMU noise at the threshold doesn't
   // bounce brightness between 8 and full every few frames.
   static int8_t faceDownFrames = 0;
-  if (!inPrompt) {
+  if (!inPrompt && (now - lastImuCheck >= (screenOff ? IMU_POLL_IDLE_MS : 16))) {
+    lastImuCheck = now;
     bool down = isFaceDown();
     if (down)       { if (faceDownFrames < 20) faceDownFrames++; }
     else            { if (faceDownFrames > -10) faceDownFrames--; }
@@ -1315,7 +1323,7 @@ void loop() {
     napStartMs = now;
     M5.Axp.ScreenBreath(8);
     dimmed = true;
-    setCpuFrequencyMhz(80);
+    setCpuFrequencyMhz(40);
   } else if (napping && faceDownFrames <= -8) {
     napping = false;
     setCpuFrequencyMhz(240);
@@ -1332,7 +1340,23 @@ void loop() {
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     M5.Axp.SetLDO2(false);
     screenOff = true;
-    setCpuFrequencyMhz(80);
+    screenOffSinceMs = millis();
+    setCpuFrequencyMhz(40);
+  }
+
+  // BLE idle power save: after BLE_IDLE_MS with screen off and on battery,
+  // negotiate a slow connection interval then disconnect and stop advertising.
+  // Advertising resumes when the user presses a button (wake()).
+  if (screenOff && !bleIdleSleep && !_onUsb
+      && screenOffSinceMs > 0
+      && millis() - screenOffSinceMs > BLE_IDLE_MS) {
+    bleIdleSleep = true;
+    if (bleConnected()) bleDisconnect();
+    // Note: onDisconnect restarts advertising automatically. We don't stop it —
+    // stopping advertising on ESP32 Arduino BLE is unreliable; the stack doesn't
+    // restart cleanly. Instead we just disconnect, reducing power by dropping the
+    // connection keepalive. The device stays discoverable at low advertising cost.
+    Serial.println("[pm] BLE idle — disconnected, still advertising");
   }
 
   if (screenOff) {
@@ -1342,7 +1366,8 @@ void loop() {
     for (uint8_t i = 0; i < 10; i++) {
       delay(50);
       M5.update();
-      if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.Axp.GetBtnPress()) break;
+      if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed()) break;
+      if (M5.Axp.GetBtnPress() == 0x02) { wake(); break; }
     }
   } else {
     delay(16);

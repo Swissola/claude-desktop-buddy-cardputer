@@ -145,6 +145,10 @@ void bleInit(const char* deviceName) {
   Serial.printf("[ble] advertising as '%s'\n", deviceName);
 }
 
+void bleDisconnect() {
+  if (server && connected) server->disconnect(server->getConnId());
+}
+
 bool bleConnected() { return connected; }
 bool bleSecure()    { return secure; }
 uint32_t blePasskey() { return passkey; }
