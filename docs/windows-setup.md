@@ -86,4 +86,6 @@ $env:PYTHONUTF8=1; cc-buddy-bridge hud --ascii
 
 **Hooks not firing:** Check `~/.claude/settings.json` has SessionStart/SessionEnd/PreToolUse/PostToolUse/UserPromptSubmit/Stop hooks pointing to cc-buddy-bridge. Re-run `cc-buddy-bridge install` if missing.
 
-**Multiple machines:** The firmware supports up to 7 bonded hosts. Each machine pairs independently — just pair normally on the new machine. The device reconnects to whichever host is in range and has the daemon running. No need to clear bonds when switching.
+**Multiple machines:** The firmware supports up to 7 bonded hosts. Each machine pairs independently — just pair normally on the new machine. No need to clear bonds when switching.
+
+When you move between machines, the device reconnects automatically to whichever host's daemon finds it first. The daemon on the machine you left will lose the connection, attempt a radio reset once, then fall back to polling every 60 seconds — it won't interfere with the active connection on the other machine. No manual action needed on either end.
