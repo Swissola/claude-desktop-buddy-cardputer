@@ -121,7 +121,7 @@ static void nextPet() {
 }
 uint32_t wakeTransitionUntil = 0;
 const uint32_t SCREEN_OFF_MS    = 15000;
-const uint32_t BLE_IDLE_MS      = 1UL * 60UL * 1000UL;   // TEST: 1 min (change to 30UL before release)
+const uint32_t BLE_IDLE_MS      = 15UL * 60UL * 1000UL;
 const uint32_t IMU_POLL_IDLE_MS = 500;   // IMU check interval when screen off
 
 bool     napping = false;
