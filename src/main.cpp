@@ -179,8 +179,8 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 11;
+const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "12hr", "ascii pet", "reset", "back" };
+const uint8_t SETTINGS_N = 12;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -195,7 +195,7 @@ static void applySetting(uint8_t idx) {
     case 0:
       brightLevel = (brightLevel + 1) % 5;
       applyBrightness();
-      return;
+      break;
     case 1: s.sound   = !s.sound;   break;
     case 2: s.vibrate = !s.vibrate; break;
     case 3:
@@ -209,9 +209,10 @@ static void applySetting(uint8_t idx) {
     case 5: s.led = !s.led; break;
     case 6: s.hud = !s.hud; break;
     case 7: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 8: nextPet(); return;
-    case 9:  resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 10: settingsOpen = false; characterInvalidate(); return;
+    case 8: s.ampm = !s.ampm; break;
+    case 9: nextPet(); return;
+    case 10: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
+    case 11: settingsOpen = false; characterInvalidate(); return;
   }
   settingsSave();
 }
@@ -315,6 +316,9 @@ static void drawSettings() {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
     } else if (i == 8) {
+      spr.setTextColor(s.ampm ? GREEN : p.textDim, PANEL);
+      spr.print(s.ampm ? " on" : "off");
+    } else if (i == 9) {
       spr.print(buddyMode ? buddySpeciesName() : "gif");
     }
   }
@@ -450,7 +454,14 @@ static const char* const DOW[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 static uint8_t clockDow() { return _clkDt.WeekDay % 7; }
 static void drawClock() {
   const Palette& p = characterPalette();
-  char hm[6]; snprintf(hm, sizeof(hm), "%02u:%02u", _clkTm.Hours, _clkTm.Minutes);
+  uint8_t h = _clkTm.Hours;
+  const char* ampmStr = "";
+  if (settings().ampm) {
+    ampmStr = (h < 12) ? "AM" : "PM";
+    h = h % 12;
+    if (h == 0) h = 12;
+  }
+  char hm[6]; snprintf(hm, sizeof(hm), settings().ampm ? "%u:%02u" : "%02u:%02u", h, _clkTm.Minutes);
   char ss[4]; snprintf(ss, sizeof(ss), ":%02u", _clkTm.Seconds);
   uint8_t mi = (_clkDt.Month >= 1 && _clkDt.Month <= 12) ? _clkDt.Month - 1 : 0;
   char dl[8]; snprintf(dl, sizeof(dl), "%s %02u", MON[mi], _clkDt.Date);
@@ -462,8 +473,14 @@ static void drawClock() {
     spr.fillRect(0, 90, W, H - 90, p.bg);
     spr.setTextDatum(MC_DATUM);
     spr.setTextSize(4); spr.setTextColor(p.text, p.bg);    spr.drawString(hm, CX, 140);
-    spr.setTextSize(2); spr.setTextColor(p.textDim, p.bg); spr.drawString(ss, CX, 175);
-    spr.setTextSize(1);                                     spr.drawString(dl, CX, 200);
+    spr.setTextSize(2); spr.setTextColor(p.textDim, p.bg);
+    if (settings().ampm) {
+      spr.drawString(ampmStr, CX, 162);
+      spr.drawString(dl, CX, 200);
+    } else {
+      spr.drawString(ss, CX, 175);
+      spr.drawString(dl, CX, 200);
+    }
     spr.setTextDatum(TL_DATUM);
     return;
   }
@@ -484,7 +501,8 @@ static void drawClock() {
     char ssl[3]; snprintf(ssl, sizeof(ssl), "%02u", _clkTm.Seconds);
     M5.Lcd.setTextDatum(MC_DATUM);
     M5.Lcd.setTextSize(3); M5.Lcd.setTextColor(p.text, p.bg);    M5.Lcd.drawString(hm, 170, 42);
-    M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg); M5.Lcd.drawString(ssl, 170, 72);
+    M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg);
+    M5.Lcd.drawString(settings().ampm ? ampmStr : ssl, 170, 72);
                                                                   M5.Lcd.drawString(wdl, 170, 102);
     M5.Lcd.setTextDatum(TL_DATUM);
     M5.Lcd.setTextSize(1);
@@ -985,10 +1003,10 @@ void setup() {
   ledcSetup(VIBRATE_CH, 500, 8); // 500 Hz, 8-bit resolution
   ledcAttachPin(VIBRATE_PIN, VIBRATE_CH);
   ledcWrite(VIBRATE_CH, 0);      // off
-  applyBrightness();
   lastInteractMs = millis();
   statsLoad();
   settingsLoad();
+  applyBrightness();
   petNameLoad();
   buddyInit();
 

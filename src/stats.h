@@ -184,9 +184,10 @@ struct Settings {
   bool hud;
   bool vibrate;       // Vibration HAT (GPIO26) — haptic feedback on attention/celebrate
   uint8_t clockRot;   // 0=auto 1=portrait 2=landscape
+  bool ampm;          // true = 12hr AM/PM, false = 24hr
 };
 
-static Settings _settings = { true, true, false, true, true, true, 0 };
+static Settings _settings = { true, true, false, true, true, true, 0, false };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
@@ -198,6 +199,10 @@ inline void settingsLoad() {
   _settings.vibrate  = _prefs.getBool("s_vib",  true);
   _settings.clockRot = _prefs.getUChar("s_crot", 0);
   if (_settings.clockRot > 2) _settings.clockRot = 0;
+  _settings.ampm    = _prefs.getBool("s_ampm", false);
+  extern uint8_t brightLevel;
+  brightLevel = _prefs.getUChar("s_bright", 4);
+  if (brightLevel > 4) brightLevel = 4;
   _prefs.end();
 }
 
@@ -210,6 +215,9 @@ inline void settingsSave() {
   _prefs.putBool("s_hud",  _settings.hud);
   _prefs.putBool("s_vib",  _settings.vibrate);
   _prefs.putUChar("s_crot", _settings.clockRot);
+  _prefs.putBool("s_ampm", _settings.ampm);
+  extern uint8_t brightLevel;
+  _prefs.putUChar("s_bright", brightLevel);
   _prefs.end();
 }
 
