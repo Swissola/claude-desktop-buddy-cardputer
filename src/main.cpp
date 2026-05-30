@@ -138,6 +138,7 @@ static void applyBrightness() { M5.Axp.ScreenBreath(20 + brightLevel * 20); }
 static void wake() {
   lastInteractMs = millis();
   if (screenOff) {
+    setCpuFrequencyMhz(240);
     M5.Axp.SetLDO2(true);
     applyBrightness();
     screenOff = false;
@@ -1310,7 +1311,8 @@ void loop() {
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     M5.Axp.SetLDO2(false);
     screenOff = true;
+    setCpuFrequencyMhz(80);
   }
 
-  delay(screenOff ? 100 : 16);
+  delay(screenOff ? 500 : 16);
 }
