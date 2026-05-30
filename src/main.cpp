@@ -1315,8 +1315,10 @@ void loop() {
     napStartMs = now;
     M5.Axp.ScreenBreath(8);
     dimmed = true;
+    setCpuFrequencyMhz(80);
   } else if (napping && faceDownFrames <= -8) {
     napping = false;
+    setCpuFrequencyMhz(240);
     statsOnNapEnd((now - napStartMs) / 1000);
     statsOnWake();
     wake();
@@ -1333,5 +1335,16 @@ void loop() {
     setCpuFrequencyMhz(80);
   }
 
-  delay(screenOff ? 500 : 16);
+  if (screenOff) {
+    // Break idle sleep into 50ms chunks so button presses are caught promptly.
+    // M5.update() at the top of loop() reads button state; we need to re-enter
+    // the loop quickly enough that a short press isn't missed between polls.
+    for (uint8_t i = 0; i < 10; i++) {
+      delay(50);
+      M5.update();
+      if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.Axp.GetBtnPress()) break;
+    }
+  } else {
+    delay(16);
+  }
 }
