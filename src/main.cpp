@@ -1100,18 +1100,15 @@ void loop() {
     wake();
   }
 
-  // AXP power button (left side): short-press toggles screen off,
-  // long-press powers off (software, so it works reliably).
-  uint8_t axpBtn = M5.Axp.GetBtnPress();
-  if (axpBtn == 0x02) {
+  // AXP power button (left side): short-press toggles screen off.
+  // Long-press (2.5s) powers off via AXP hardware (register 0x32 bit 6).
+  if (M5.Axp.GetBtnPress() == 0x02) {
     if (screenOff) {
       wake();
     } else {
       M5.Axp.SetLDO2(false);
       screenOff = true;
     }
-  } else if (axpBtn == 0x01) {
-    M5.Axp.PowerOff();
   }
 
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
