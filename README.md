@@ -96,14 +96,29 @@ If discovery isn't finding the stick:
 | **Shake**               | dizzy                |             |             | —           |
 | **Face-down**           | nap (energy refills) |             |             |             |
 
-The screen auto-powers-off after 30s of no interaction (kept on while an
+The screen auto-powers-off after 15s of no interaction (kept on while an
 approval prompt is up). Any button press wakes it.
 
 ## ASCII pets
 
-Eighteen pets, each with seven animations (sleep, idle, busy, attention,
-celebrate, dizzy, heart). Menu → "next pet" cycles them with a counter.
+Twenty pets, each with seven animations (sleep, idle, busy, attention,
+celebrate, dizzy, heart). Menu → "ascii pet" cycles them with a counter.
 Choice persists to NVS.
+
+| # | Species  | # | Species  |
+|---|----------|---|----------|
+| 1 | capybara | 11 | snail   |
+| 2 | duck     | 12 | ghost   |
+| 3 | goose    | 13 | axolotl |
+| 4 | blob     | 14 | cactus  |
+| 5 | cat      | 15 | robot   |
+| 6 | dragon   | 16 | rabbit  |
+| 7 | octopus  | 17 | mushroom|
+| 8 | owl      | 18 | chonk   |
+| 9 | penguin  | 19 | doge    |
+| 10 | turtle  | 20 | llama   |
+
+Cycling past 20 switches to GIF mode (Claude character, if loaded).
 
 ## GIF pets
 
