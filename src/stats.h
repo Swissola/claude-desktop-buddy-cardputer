@@ -182,34 +182,39 @@ struct Settings {
   bool wifi;     // placeholder — no WiFi stack linked yet, just stores the pref
   bool led;
   bool hud;
-  bool emotionFaces;
   uint8_t clockRot;  // 0=auto 1=portrait 2=landscape
+  bool ampm;         // true = 12hr AM/PM, false = 24hr
 };
 
-static Settings _settings = { true, true, false, true, true, true, 0 };
+static Settings _settings = { true, true, false, true, true, 0, false };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
-  _settings.sound = _prefs.getBool("s_snd", true);
-  _settings.bt    = _prefs.getBool("s_bt",  true);
-  _settings.wifi  = _prefs.getBool("s_wifi",false);
-  _settings.led   = _prefs.getBool("s_led", true);
-  _settings.hud          = _prefs.getBool("s_hud", true);
-  _settings.emotionFaces = _prefs.getBool("s_emo", true);
-  _settings.clockRot     = _prefs.getUChar("s_crot", 0);
+  _settings.sound    = _prefs.getBool("s_snd",  true);
+  _settings.bt       = _prefs.getBool("s_bt",   true);
+  _settings.wifi     = _prefs.getBool("s_wifi", false);
+  _settings.led      = _prefs.getBool("s_led",  true);
+  _settings.hud      = _prefs.getBool("s_hud",  true);
+  _settings.clockRot = _prefs.getUChar("s_crot", 0);
   if (_settings.clockRot > 2) _settings.clockRot = 0;
+  _settings.ampm     = _prefs.getBool("s_ampm", false);
+  extern uint8_t brightLevel;
+  brightLevel = _prefs.getUChar("s_bright", 4);
+  if (brightLevel > 4) brightLevel = 4;
   _prefs.end();
 }
 
 inline void settingsSave() {
   _prefs.begin("buddy", false);
-  _prefs.putBool("s_snd", _settings.sound);
-  _prefs.putBool("s_bt",  _settings.bt);
-  _prefs.putBool("s_wifi",_settings.wifi);
-  _prefs.putBool("s_led", _settings.led);
-  _prefs.putBool("s_hud", _settings.hud);
-  _prefs.putBool("s_emo", _settings.emotionFaces);
+  _prefs.putBool("s_snd",  _settings.sound);
+  _prefs.putBool("s_bt",   _settings.bt);
+  _prefs.putBool("s_wifi", _settings.wifi);
+  _prefs.putBool("s_led",  _settings.led);
+  _prefs.putBool("s_hud",  _settings.hud);
   _prefs.putUChar("s_crot", _settings.clockRot);
+  _prefs.putBool("s_ampm", _settings.ampm);
+  extern uint8_t brightLevel;
+  _prefs.putUChar("s_bright", brightLevel);
   _prefs.end();
 }
 

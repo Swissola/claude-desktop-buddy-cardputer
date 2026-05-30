@@ -20,9 +20,7 @@ static void startBt() {
 
 #include "character.h"
 #include "stats.h"
-#include "emotion.h"
 
-EmotionRenderer emotionRenderer;
 #ifdef CARDPUTER_ADV
 #include "glass2.h"
 #endif
@@ -151,6 +149,7 @@ static void applyBrightness() { halBrightness(20 + brightLevel * 20); }
 static void wake() {
   lastInteractMs = millis();
   if (screenOff) {
+    setCpuFrequencyMhz(240);
     halScreenPower(true);
     applyBrightness();
     screenOff = false;
@@ -238,7 +237,7 @@ const uint8_t MENU_N = 7;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "ascii pet", "emotions", "reset", "back" };
+const char* settingsItems[] = { "brightness", "sound", "bluetooth", "wifi", "led", "transcript", "clock rot", "12hr", "ascii pet", "reset", "back" };
 const uint8_t SETTINGS_N = 11;
 
 bool    resetOpen = false;
@@ -259,7 +258,7 @@ static void applySetting(uint8_t idx) {
     case 0:
       brightLevel = (brightLevel + 1) % 5;
       applyBrightness();
-      return;
+      break;
     case 1: s.sound = !s.sound; break;
     case 2:
       // BT toggle is a stored preference only — BLE stays live. Turning
@@ -272,8 +271,8 @@ static void applySetting(uint8_t idx) {
     case 4: s.led = !s.led; break;
     case 5: s.hud = !s.hud; break;
     case 6: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 7: nextPet(); return;
-    case 8: s.emotionFaces = !s.emotionFaces; break;
+    case 7: s.ampm = !s.ampm; break;
+    case 8: nextPet(); return;
     case 9: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
     case 10: settingsOpen = false; characterInvalidate(); return;
   }
@@ -392,12 +391,10 @@ static void drawSettings() {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
     } else if (i == 7) {
-      uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
-      uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
-      spr.printf("%u/%u", pos, total);
+      spr.setTextColor(s.ampm ? GREEN : p.textDim, PANEL);
+      spr.print(s.ampm ? " on" : "off");
     } else if (i == 8) {
-      spr.setTextColor(s.emotionFaces ? GREEN : p.textDim, PANEL);
-      spr.print(s.emotionFaces ? " on" : "off");
+      spr.print(buddyMode ? buddySpeciesName() : "gif");
     }
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
@@ -579,7 +576,14 @@ static const char* const DOW[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 static uint8_t clockDow() { return _clkDt.WeekDay % 7; }
 static void drawClock() {
   const Palette& p = characterPalette();
-  char hm[6]; snprintf(hm, sizeof(hm), "%02u:%02u", _clkTm.Hours, _clkTm.Minutes);
+  uint8_t h = _clkTm.Hours;
+  const char* ampmStr = "";
+  if (settings().ampm) {
+    ampmStr = (h < 12) ? "AM" : "PM";
+    h = h % 12;
+    if (h == 0) h = 12;
+  }
+  char hm[6]; snprintf(hm, sizeof(hm), settings().ampm ? "%u:%02u" : "%02u:%02u", h, _clkTm.Minutes);
   char ss[4]; snprintf(ss, sizeof(ss), ":%02u", _clkTm.Seconds);
   uint8_t mi = (_clkDt.Month >= 1 && _clkDt.Month <= 12) ? _clkDt.Month - 1 : 0;
   char dl[8]; snprintf(dl, sizeof(dl), "%s %02u", MON[mi], _clkDt.Date);
@@ -592,7 +596,11 @@ static void drawClock() {
     // vertical space a size-2 clock ate.
     spr.fillRect(0, 0, W, 10, p.bg);
     char line[24];
-    snprintf(line, sizeof(line), "%s%s  %s", hm, ss, dl);
+    if (settings().ampm) {
+      snprintf(line, sizeof(line), "%s%s  %s", hm, ampmStr, dl);
+    } else {
+      snprintf(line, sizeof(line), "%s%s  %s", hm, ss, dl);
+    }
     spr.setTextDatum(MC_DATUM);
     spr.setTextSize(1); spr.setTextColor(p.text, p.bg);
     spr.drawString(line, CX, 5);
@@ -627,7 +635,8 @@ static void drawClock() {
     char ssl[3]; snprintf(ssl, sizeof(ssl), "%02u", _clkTm.Seconds);
     M5.Lcd.setTextDatum(MC_DATUM);
     M5.Lcd.setTextSize(3); M5.Lcd.setTextColor(p.text, p.bg);    M5.Lcd.drawString(hm, 170, 42);
-    M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg); M5.Lcd.drawString(ssl, 170, 72);
+    M5.Lcd.setTextSize(2); M5.Lcd.setTextColor(p.textDim, p.bg);
+    M5.Lcd.drawString(settings().ampm ? ampmStr : ssl, 170, 72);
                                                                   M5.Lcd.drawString(wdl, 170, 102);
     M5.Lcd.setTextDatum(TL_DATUM);
     M5.Lcd.setTextSize(1);
@@ -779,7 +788,6 @@ void drawInfo() {
     spr.setTextColor(p.textDim, p.bg); ln("       on a pending prompt"); y += 4;
     spr.setTextColor(p.text, p.bg);    ln("M      open menu");
     spr.setTextColor(p.textDim, p.bg); ln("G      toggle demo mode");
-    spr.setTextColor(p.textDim, p.bg); ln("E      toggle emotion faces"); y += 4;
     spr.setTextColor(p.textDim, p.bg); ln("Power: slide switch on side");
 #else
     spr.setTextColor(p.text, p.bg);    ln("A   front");
@@ -1324,13 +1332,12 @@ void setup() {
   halBeepInit();
   startBt();
   halLedSet(0, 0, 0);   // make sure the LED isn't stuck on from a reset
-  applyBrightness();
   lastInteractMs = millis();
   statsLoad();
   settingsLoad();
+  applyBrightness();
   petNameLoad();
   buddyInit();
-  emotionRenderer.init();
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.createSprite(W, H);
@@ -1449,18 +1456,8 @@ void loop() {
       char l4[22];
       snprintf(l4, sizeof(l4), "lv%u  %lutok", stats().level,
                (unsigned long)stats().tokens);
-      static const char* const emotionNames[] = {
-        "idle", "thinking", "working", "bash", "read", "write",
-        "success", "error", "sleepy"
-      };
       char l2[22];
-      if (settings().emotionFaces && buddyMode) {
-        Emotion cur = emotionRenderer.getCurrent();
-        snprintf(l2, sizeof(l2), "%s/%s", stateNames[activeState],
-                 cur < EMOTION_COUNT ? emotionNames[cur] : "");
-      } else {
-        snprintf(l2, sizeof(l2), "%s", stateNames[activeState]);
-      }
+      snprintf(l2, sizeof(l2), "%s", stateNames[activeState]);
       glass2Show(petName()[0] ? petName() : "Buddy",
                  l2, tama.msg[0] ? tama.msg : "", l4);
     }
@@ -1487,6 +1484,7 @@ void loop() {
     } else {
       halScreenPower(false);
       screenOff = true;
+      setCpuFrequencyMhz(80);
     }
   }
 
@@ -1677,7 +1675,6 @@ void loop() {
         sfxConfirm();
         break;
       case HalKey::ToggleEmo:
-        settings().emotionFaces = !settings().emotionFaces;
         settingsSave();
         sfxConfirm();
         break;
@@ -1770,19 +1767,6 @@ void loop() {
     // full-screen info (Cardputer).
   } else if (buddyMode) {
     buddyTick(activeState);
-    if (settings().emotionFaces) {
-      Emotion emo;
-      if (!bleConnected())                 emo = EMOTION_SLEEPY;
-      else if (tama.promptId[0])           emo = inferEmotionFromTool(tama.promptTool);
-      else if (activeState == P_CELEBRATE) emo = EMOTION_SUCCESS;
-      else if (activeState == P_DIZZY)     emo = EMOTION_ERROR;
-      else if (tama.sessionsRunning > 0)   emo = EMOTION_WORKING;
-      else if (tama.sessionsWaiting > 0)   emo = EMOTION_THINKING;
-      else                                 emo = EMOTION_IDLE;
-      emotionRenderer.setEmotion(emo);
-      emotionRenderer.tick(millis());
-      emotionRenderer.renderTo(&spr, 185, 42);
-    }
   } else if (characterLoaded()) {
     characterSetState(activeState);
     characterTick();
@@ -1839,8 +1823,10 @@ void loop() {
     napStartMs = now;
     halBrightness(8);
     dimmed = true;
+    setCpuFrequencyMhz(80);
   } else if (napping && faceDownFrames <= -8) {
     napping = false;
+    setCpuFrequencyMhz(240);
     statsOnNapEnd((now - napStartMs) / 1000);
     statsOnWake();
     wake();
@@ -1848,12 +1834,21 @@ void loop() {
 
   // millis() not the cached `now`: wake() runs after `now` is captured,
   // so now - lastInteractMs underflows when a button is held → flicker.
-  // No auto-off on USB power — clock face wants to stay visible while charging.
-  if (!screenOff && !inPrompt && !_onUsb
+  // No auto-off on USB power with data — wall charger/power bank times out normally.
+  if (!screenOff && !inPrompt && !(_onUsb && dataConnected())
       && millis() - lastInteractMs > SCREEN_OFF_MS) {
     halScreenPower(false);
     screenOff = true;
+    setCpuFrequencyMhz(80);
   }
 
-  delay(screenOff ? 100 : 16);
+  if (screenOff) {
+    for (uint8_t i = 0; i < 10; i++) {
+      delay(50);
+      halUpdate();
+      if (halBtnA().wasPressed() || halBtnB().wasPressed() || halPollKey() != HalKey::None) break;
+    }
+  } else {
+    delay(16);
+  }
 }
