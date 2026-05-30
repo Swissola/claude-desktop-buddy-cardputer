@@ -212,7 +212,7 @@ static void applySetting(uint8_t idx) {
     case 8: s.ampm = !s.ampm; break;
     case 9: nextPet(); return;
     case 10: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 11: settingsOpen = false; characterInvalidate(); return;
+    case 11: settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); return;
   }
   settingsSave();
 }
@@ -1134,11 +1134,11 @@ void loop() {
     btnALong = true;
     beep(800, 60);
     if (resetOpen) { resetOpen = false; }
-    else if (settingsOpen) { settingsOpen = false; characterInvalidate(); }
+    else if (settingsOpen) { settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); }
     else {
       menuOpen = !menuOpen;
       menuSel = 0;
-      if (!menuOpen) characterInvalidate();
+      if (!menuOpen) { spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); }
     }
     Serial.println(menuOpen ? "menu open" : "menu close");
   }
