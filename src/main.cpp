@@ -314,9 +314,7 @@ static void drawSettings() {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
     } else if (i == 8) {
-      uint8_t total = buddySpeciesCount() + (gifAvailable ? 1 : 0);
-      uint8_t pos   = buddyMode ? buddySpeciesIdx() + 1 : total;
-      spr.printf("%u/%u", pos, total);
+      spr.print(buddyMode ? buddySpeciesName() : "gif");
     }
   }
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
@@ -1102,15 +1100,18 @@ void loop() {
     wake();
   }
 
-  // AXP power button (left side): short-press toggles screen off.
-  // Long-press (6s) still powers off the device via AXP hardware.
-  if (M5.Axp.GetBtnPress() == 0x02) {
+  // AXP power button (left side): short-press toggles screen off,
+  // long-press powers off (software, so it works reliably).
+  uint8_t axpBtn = M5.Axp.GetBtnPress();
+  if (axpBtn == 0x02) {
     if (screenOff) {
       wake();
     } else {
       M5.Axp.SetLDO2(false);
       screenOff = true;
     }
+  } else if (axpBtn == 0x01) {
+    M5.Axp.PowerOff();
   }
 
   if (M5.BtnA.pressedFor(600) && !btnALong && !swallowBtnA) {
