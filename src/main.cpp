@@ -274,7 +274,7 @@ static void applySetting(uint8_t idx) {
     case 7: s.ampm = !s.ampm; break;
     case 8: nextPet(); return;
     case 9: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 10: settingsOpen = false; characterInvalidate(); return;
+    case 10: settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); return;
   }
   settingsSave();
 }
@@ -1492,11 +1492,11 @@ void loop() {
     btnALong = true;
     sfxMenu();
     if (resetOpen) { resetOpen = false; }
-    else if (settingsOpen) { settingsOpen = false; characterInvalidate(); }
+    else if (settingsOpen) { settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); }
     else {
       menuOpen = !menuOpen;
       menuSel = 0;
-      if (!menuOpen) characterInvalidate();
+      if (!menuOpen) { spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); }
     }
     Serial.println(menuOpen ? "menu open" : "menu close");
   }
@@ -1653,7 +1653,7 @@ void loop() {
       if      (k == HalKey::Up)      { settingsSel = (settingsSel + SETTINGS_N - 1) % SETTINGS_N; sfxNav(); }
       else if (k == HalKey::Down)    { settingsSel = (settingsSel + 1) % SETTINGS_N;              sfxNav(); }
       else if (k == HalKey::Approve) { sfxConfirm(); applySetting(settingsSel); consumedEnter(); }
-      else if (k == HalKey::Back)    { sfxBack(); settingsOpen = false; characterInvalidate(); consumedDel(); }
+      else if (k == HalKey::Back)    { sfxBack(); settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); consumedDel(); }
       continue;
     }
     if (menuOpen) {
