@@ -139,8 +139,16 @@ void bleInit(const char* deviceName) {
   BLEAdvertising* adv = BLEDevice::getAdvertising();
   adv->addServiceUUID(NUS_SERVICE_UUID);
   adv->setScanResponse(true);
-  adv->setMinPreferred(0x06);   // iOS-friendly connection interval
-  adv->setMaxPreferred(0x12);
+  // Connection interval (units of 1.25ms). We advertise a LONG preferred
+  // interval to cut idle radio wakeups — this is a wearable on battery, and at
+  // the old iOS-friendly 7.5-22.5ms the radio woke ~44-130x/sec even when idle,
+  // a major drain. 200-500ms means the central polls us far less often. Set via
+  // advertised preferred params only (the central honours these at connect
+  // time) — NOT a runtime updateConnParams() call, which crashed the BLE stack.
+  // Tradeoff: up to ~0.5s extra latency delivering a tool-approval prompt,
+  // imperceptible for this use. 0xA0=160=200ms, 0x190=400=500ms.
+  adv->setMinPreferred(0xA0);   // 200ms
+  adv->setMaxPreferred(0x190);  // 500ms
   BLEDevice::startAdvertising();
   Serial.printf("[ble] advertising as '%s'\n", deviceName);
 }
