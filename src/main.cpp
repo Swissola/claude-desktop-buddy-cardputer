@@ -168,7 +168,13 @@ bool     responseSent = false;
 // plus a periodic timer so we resume to re-poll the AXP power button (on I2C,
 // can't GPIO-wake) and let the main loop re-evaluate. Returns true if a button
 // caused the wake (caller then wake()s the screen).
-static const uint32_t LIGHT_SLEEP_TIMER_US = 2UL * 1000UL * 1000UL;  // 2s re-poll
+// 15s re-poll. The timer wake exists only to re-check the AXP power button
+// (I2C, can't GPIO-wake) for a hold-to-power-off. At 2s the chip woke 30x/min —
+// each wake is a full CPU spin-up + I2C read, which dominated idle draw and
+// kept "light sleep" at ~11.5%/hr. 15s cuts that overhead ~7x. The buttons (A/B)
+// still wake instantly via GPIO; only the power-button-off check is delayed —
+// holding power-off now registers within 15s instead of 2s, which is fine.
+static const uint32_t LIGHT_SLEEP_TIMER_US = 15UL * 1000UL * 1000UL;
 
 static bool lightSleepUntilEvent() {
   // Configure button GPIOs as low-level light-sleep wake sources.

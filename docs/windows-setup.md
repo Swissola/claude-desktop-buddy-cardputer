@@ -60,8 +60,8 @@ schtasks /run /tn "cc-buddy-bridge-daemon"
 The daemon will:
 
 1. Scan for the device
-2. If not found after 2 scans (~9s), automatically toggle the BT radio to unstick the WinRT scanner
-3. Connect within ~18 seconds of starting
+2. If not found after 5 consecutive scan misses (~25s), automatically toggle the BT radio to unstick the WinRT scanner. This is retryable — if one toggle doesn't recover discovery it re-arms after another run of misses, up to 3 attempts with a cooldown, then falls back to polling rather than power-cycling the radio indefinitely. (Toggling the radio briefly drops *all* the machine's Bluetooth devices, hence the conservative threshold.)
+3. Connect within ~18 seconds once the device is discoverable
 
 From the next login onwards it starts silently in the background automatically.
 
@@ -82,10 +82,14 @@ $env:PYTHONUTF8=1; cc-buddy-bridge hud --ascii
 
 **Device not connecting after 60s:** Toggle Bluetooth off and on in Windows Settings. The daemon will reconnect automatically within ~18s.
 
-**"buddy: off" in hud but device is on:** The daemon is running but BLE is disconnected. Wait ~18s for the radio reset to fire, or toggle BT.
+**"buddy: off" in hud but device is on:** The daemon is running but BLE is disconnected. Wait for the radio reset to fire (~25s of misses), or toggle BT.
+
+**Connects but immediately drops, hud shows "No Claude connected", daemon log shows `start_notify ... Unreachable`:** The Windows BLE bond is stale/mismatched (can happen if the device was paired to another app like the Claude Desktop hardware-buddy window and then unpaired). The encrypted GATT subscription can't establish. Fix: remove the **Claude-XXXX** device in Windows Settings → Bluetooth, then re-pair it. (Encountered 2026-06; re-pairing fully resolves it.)
 
 **Hooks not firing:** Check `~/.claude/settings.json` has SessionStart/SessionEnd/PreToolUse/PostToolUse/UserPromptSubmit/Stop hooks pointing to cc-buddy-bridge. Re-run `cc-buddy-bridge install` if missing.
 
-**Multiple machines:** The firmware supports up to 7 bonded hosts. Each machine pairs independently — just pair normally on the new machine. No need to clear bonds when switching.
+**Multiple machines:** The BLE stack stores up to 15 bonds (`CONFIG_BT_SMP_MAX_BONDS`), so the device can remember several hosts. Each machine pairs independently via Windows Settings — pair normally on the new machine.
 
-When you move between machines, the device reconnects automatically to whichever host's daemon finds it first. The daemon on the machine you left will lose the connection, attempt a radio reset once, then fall back to polling every 60 seconds — it won't interfere with the active connection on the other machine. No manual action needed on either end.
+The intended behaviour: when you move between machines, the device reconnects to whichever host's daemon finds it first; the machine you left loses the connection, attempts a radio reset, then falls back to 60s polling without interfering with the active host.
+
+> ⚠️ **Multi-host roaming is capability-present but NOT yet verified between two live daemon hosts** (as of 2026-06). Bond management on this ESP32 stack has proven fragile — notably, unpairing the device from one host (e.g. the Claude Desktop hardware-buddy window) was observed to break the *encryption* bond for a different host, requiring a re-pair (see the "Unreachable" troubleshooting entry above). Before relying on roaming: pair the second machine, confirm the **first** machine's connection still works afterwards, then test actually moving between them. If a host stops connecting with the "Unreachable" symptom, re-pair it on that machine. Do NOT pair the device to the Claude Desktop hardware-buddy window — it competes for the single connection slot and disturbs the daemon bonds.
