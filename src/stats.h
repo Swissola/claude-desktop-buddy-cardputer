@@ -185,9 +185,22 @@ struct Settings {
   bool vibrate;       // Vibration HAT (GPIO26) — haptic feedback on attention/celebrate
   uint8_t clockRot;   // 0=auto 1=portrait 2=landscape
   bool ampm;          // true = 12hr AM/PM, false = 24hr
+  uint8_t sleepIdx;   // BLE idle-sleep timeout: 0=off 1=5m 2=15m 3=30m 4=60m
 };
 
-static Settings _settings = { true, true, false, true, true, true, 0, false };
+// BLE idle-sleep timeout choices (index → milliseconds). 0 = never sleep
+// (stays connected/available for auth indefinitely, max battery cost).
+static const uint32_t SLEEP_TIMEOUT_MS[] = {
+  0,                       // 0: off
+  5UL  * 60UL * 1000UL,    // 1: 5 min
+  15UL * 60UL * 1000UL,    // 2: 15 min (default)
+  30UL * 60UL * 1000UL,    // 3: 30 min
+  60UL * 60UL * 1000UL,    // 4: 60 min
+};
+static const char* SLEEP_TIMEOUT_LABELS[] = { "off", "5m", "15m", "30m", "60m" };
+static const uint8_t SLEEP_TIMEOUT_N = 5;
+
+static Settings _settings = { true, true, false, true, true, true, 0, false, 2 };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
@@ -200,6 +213,8 @@ inline void settingsLoad() {
   _settings.clockRot = _prefs.getUChar("s_crot", 0);
   if (_settings.clockRot > 2) _settings.clockRot = 0;
   _settings.ampm    = _prefs.getBool("s_ampm", false);
+  _settings.sleepIdx = _prefs.getUChar("s_sleep", 2);   // default 15m
+  if (_settings.sleepIdx >= SLEEP_TIMEOUT_N) _settings.sleepIdx = 2;
   extern uint8_t brightLevel;
   brightLevel = _prefs.getUChar("s_bright", 4);
   if (brightLevel > 4) brightLevel = 4;
@@ -216,6 +231,7 @@ inline void settingsSave() {
   _prefs.putBool("s_vib",  _settings.vibrate);
   _prefs.putUChar("s_crot", _settings.clockRot);
   _prefs.putBool("s_ampm", _settings.ampm);
+  _prefs.putUChar("s_sleep", _settings.sleepIdx);
   extern uint8_t brightLevel;
   _prefs.putUChar("s_bright", brightLevel);
   _prefs.end();

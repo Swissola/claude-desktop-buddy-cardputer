@@ -1,6 +1,8 @@
 #include <M5StickCPlus.h>
 #include <LittleFS.h>
 #include <stdarg.h>
+#include <esp_sleep.h>      // light sleep for the disconnected-idle power state
+#include <driver/gpio.h>    // gpio_wakeup_enable for button wake from light sleep
 #include "ble_bridge.h"
 #include "data.h"
 #include "buddy.h"
@@ -121,7 +123,8 @@ static void nextPet() {
 }
 uint32_t wakeTransitionUntil = 0;
 const uint32_t SCREEN_OFF_MS    = 15000;
-const uint32_t BLE_IDLE_MS      = 15UL * 60UL * 1000UL;
+// BLE idle-sleep timeout is now user-configurable (settings → "sleep"),
+// stored as settings().sleepIdx → SLEEP_TIMEOUT_MS[]. 0 = never sleep.
 const uint32_t IMU_POLL_IDLE_MS = 500;   // IMU check interval when screen off
 
 bool     napping = false;
@@ -155,6 +158,34 @@ static void wake() {
 }
 bool     responseSent = false;
 
+// Light sleep for the disconnected-idle power state. ONLY safe to call once
+// BLE is already disconnected (bleIdleSleep) — light sleep stops CPU/peripheral
+// clocks and would otherwise make the BLE controller miss connection events and
+// drop the link. (True connected light-sleep needs CONFIG_PM_ENABLE, which the
+// prebuilt Arduino SDK doesn't compile in.)
+//
+// Wakes on: BtnA (GPIO37) or BtnB (GPIO39) going LOW (buttons are active-low),
+// plus a periodic timer so we resume to re-poll the AXP power button (on I2C,
+// can't GPIO-wake) and let the main loop re-evaluate. Returns true if a button
+// caused the wake (caller then wake()s the screen).
+static const uint32_t LIGHT_SLEEP_TIMER_US = 2UL * 1000UL * 1000UL;  // 2s re-poll
+
+static bool lightSleepUntilEvent() {
+  // Configure button GPIOs as low-level light-sleep wake sources.
+  gpio_wakeup_enable((gpio_num_t)BUTTON_A_PIN, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable((gpio_num_t)BUTTON_B_PIN, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+  esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_TIMER_US);
+
+  esp_light_sleep_start();   // CPU halts here until a wake source fires
+
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  // Tidy up so these don't linger as wake sources for any later sleep.
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  return cause == ESP_SLEEP_WAKEUP_GPIO;
+}
+
 static void beep(uint16_t freq, uint16_t dur) {
   if (settings().sound) M5.Beep.tone(freq, dur);
 }
@@ -186,8 +217,8 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "12hr", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 12;
+const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "12hr", "sleep", "ascii pet", "reset", "back" };
+const uint8_t SETTINGS_N = 13;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -217,9 +248,10 @@ static void applySetting(uint8_t idx) {
     case 6: s.hud = !s.hud; break;
     case 7: s.clockRot = (s.clockRot + 1) % 3; break;
     case 8: s.ampm = !s.ampm; break;
-    case 9: nextPet(); return;
-    case 10: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 11: settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); return;
+    case 9: s.sleepIdx = (s.sleepIdx + 1) % SLEEP_TIMEOUT_N; break;  // off/5m/15m/30m/60m
+    case 10: nextPet(); return;
+    case 11: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
+    case 12: settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); return;
   }
   settingsSave();
 }
@@ -326,6 +358,9 @@ static void drawSettings() {
       spr.setTextColor(s.ampm ? GREEN : p.textDim, PANEL);
       spr.print(s.ampm ? " on" : "off");
     } else if (i == 9) {
+      spr.setTextColor(s.sleepIdx == 0 ? p.textDim : GREEN, PANEL);
+      spr.print(SLEEP_TIMEOUT_LABELS[s.sleepIdx]);
+    } else if (i == 10) {
       spr.print(buddyMode ? buddySpeciesName() : "gif");
     }
   }
@@ -1344,12 +1379,15 @@ void loop() {
     setCpuFrequencyMhz(40);
   }
 
-  // BLE idle power save: after BLE_IDLE_MS with screen off and on battery,
-  // negotiate a slow connection interval then disconnect and stop advertising.
-  // Advertising resumes when the user presses a button (wake()).
-  if (screenOff && !bleIdleSleep && !_onUsb
+  // BLE idle power save: after the configured timeout with screen off and on
+  // battery, disconnect BLE and (below) light-sleep. Advertising resumes and
+  // the daemon reconnects when the user presses a button (wake()).
+  // settings().sleepIdx == 0 → "off": never idle-sleep, stay connected and
+  // available for auth prompts indefinitely (max battery cost).
+  uint32_t sleepTimeoutMs = SLEEP_TIMEOUT_MS[settings().sleepIdx];
+  if (screenOff && !bleIdleSleep && !_onUsb && sleepTimeoutMs > 0
       && screenOffSinceMs > 0
-      && millis() - screenOffSinceMs > BLE_IDLE_MS) {
+      && millis() - screenOffSinceMs > sleepTimeoutMs) {
     bleIdleSleep = true;
     if (bleConnected()) bleDisconnect();
     // Note: onDisconnect restarts advertising automatically. We don't stop it —
@@ -1359,10 +1397,20 @@ void loop() {
     Serial.println("[pm] BLE idle — disconnected, still advertising");
   }
 
-  if (screenOff) {
-    // Break idle sleep into 50ms chunks so button presses are caught promptly.
-    // M5.update() at the top of loop() reads button state; we need to re-enter
-    // the loop quickly enough that a short press isn't missed between polls.
+  if (screenOff && bleIdleSleep) {
+    // Deep idle: BLE already disconnected, so real light sleep is safe and
+    // sips power (vs the delay() busy-loop that kept the core awake at ~46%/hr).
+    // Wakes on a button or the 2s re-poll timer.
+    bool btnWoke = lightSleepUntilEvent();
+    M5.update();
+    if (btnWoke || M5.BtnA.wasPressed() || M5.BtnB.wasPressed()
+        || M5.Axp.GetBtnPress() == 0x02) {
+      wake();
+    }
+  } else if (screenOff) {
+    // Screen off but STILL CONNECTED — can't light-sleep (would drop BLE), so
+    // keep the chunked busy-poll. Break idle into 50ms chunks so button presses
+    // are caught promptly. M5.update() at the top of loop() reads button state.
     for (uint8_t i = 0; i < 10; i++) {
       delay(50);
       M5.update();
