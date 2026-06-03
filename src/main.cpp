@@ -143,11 +143,22 @@ static bool isFaceDown() {
 
 static void applyBrightness() { M5.Axp.ScreenBreath(20 + brightLevel * 20); }
 
+// Defined below (near the light-sleep helpers); forward-declared so wake() can
+// restore the rails/IMU when leaving the deep idle state.
+static void idlePowerRestore();
+
 static void wake() {
   lastInteractMs = millis();
   if (screenOff) {
     setCpuFrequencyMhz(240);
-    M5.Axp.SetLDO2(true);
+    // If we were in the deep idle state, the AXP SetSleep cut LDO3 (panel logic)
+    // and LDO2 (backlight) and the IMU was slept — restore them fully. Otherwise
+    // just the backlight needs re-enabling.
+    if (bleIdleSleep) {
+      idlePowerRestore();
+    } else {
+      M5.Axp.SetLDO2(true);
+    }
     applyBrightness();
     screenOff = false;
     screenOffSinceMs = 0;
@@ -175,6 +186,34 @@ bool     responseSent = false;
 // still wake instantly via GPIO; only the power-button-off check is delayed —
 // holding power-off now registers within 15s instead of 2s, which is fine.
 static const uint32_t LIGHT_SLEEP_TIMER_US = 15UL * 1000UL * 1000UL;
+
+// MPU6886 IMU sits on a rail that stays powered during light sleep and draws
+// ~1-3mA running. Put it in its low-power sleep mode (PWR_MGMT_1 bit6) before
+// idle-sleeping, and re-init on wake. Direct register write — the M5 lib
+// doesn't expose a sleep call. Addr 0x68, reg 0x6B, SLEEP bit = 0x40.
+static void imuSleep() {
+  Wire1.beginTransmission(0x68);
+  Wire1.write(0x6B);
+  Wire1.write(0x40);   // PWR_MGMT_1: SLEEP=1
+  Wire1.endTransmission();
+}
+
+// Enter the low-power idle state: cut the LCD rails (LDO2 backlight + LDO3 panel
+// logic) via the AXP's SetSleep (keeps DCDC1=ESP32 + LDO1=RTC), and sleep the
+// IMU. Called once when entering bleIdleSleep. Restored by idlePowerRestore()
+// from wake(). NOTE: we deliberately do NOT stop BLE advertising here — this
+// project previously found Arduino-Bluedroid advertising restart unreliable
+// (would not re-advertise cleanly, breaking reconnect). Rails + IMU are the
+// safe, proven power wins; revisit advertising only if more saving is needed.
+static void idlePowerDown() {
+  M5.Axp.SetSleep();   // reg 0x12 &= 0xA1 — disables LDO2/LDO3, keeps DCDC1+LDO1
+  imuSleep();
+}
+
+static void idlePowerRestore() {
+  M5.Axp.WakeUpDisplayAfterLightSleep();  // re-enable Ext/LDO3/LDO2/DCDC1
+  M5.Imu.Init();                          // wake + re-init the IMU
+}
 
 static bool lightSleepUntilEvent() {
   // Configure button GPIOs as low-level light-sleep wake sources.
@@ -1396,11 +1435,11 @@ void loop() {
       && millis() - screenOffSinceMs > sleepTimeoutMs) {
     bleIdleSleep = true;
     if (bleConnected()) bleDisconnect();
-    // Note: onDisconnect restarts advertising automatically. We don't stop it —
-    // stopping advertising on ESP32 Arduino BLE is unreliable; the stack doesn't
-    // restart cleanly. Instead we just disconnect, reducing power by dropping the
-    // connection keepalive. The device stays discoverable at low advertising cost.
-    Serial.println("[pm] BLE idle — disconnected, still advertising");
+    // onDisconnect restarts advertising automatically. We don't stop advertising
+    // (Arduino-Bluedroid restart is unreliable), but we DO cut the LCD rails and
+    // sleep the IMU — the main idle drains — so light sleep actually sips power.
+    idlePowerDown();
+    Serial.println("[pm] BLE idle — disconnected, rails+IMU off, light sleeping");
   }
 
   if (screenOff && bleIdleSleep) {
