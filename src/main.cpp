@@ -28,28 +28,71 @@ const int CX = W / 2;
 const int CY_BASE = 120;
 const int LED_PIN      = 10;     // red LED, active-low
 const int VIBRATE_PIN  = 26;     // Vibration HAT ERM motor, PWM
-const int VIBRATE_CH   = 0;      // LEDC channel
+// LEDC channel 2 — NOT 0: M5.Beep (Speaker) uses TONE_PIN_CHANNEL 0, so sharing
+// it meant every beep reconfigured the channel and killed the motor pattern
+// mid-buzz. Since approve/deny/attention all beep AND vibrate simultaneously,
+// the motor only ever got its first pulse before the beep stomped channel 0 —
+// the root cause of months of "haptics feel like one buzz then nothing".
+const int VIBRATE_CH   = 2;      // LEDC channel (separate from beep's ch0)
 
-// Patterns: alternating on/off durations in ms. Even indices = motor on,
-// odd = motor off. Zero-terminated. Mirror the buzzer's character:
-//   attention  — two sharp pulses (mirrors 1200Hz alert chirp)
-//   approve    — single crisp tap  (mirrors high 2400Hz confirm beep)
-//   deny       — single heavy thud (mirrors low 600Hz deny tone)
-//   celebrate  — three quick bursts (fills the gap — buzzer is silent here)
-static const uint16_t PAT_ATTENTION[] = { 80, 70, 80, 0 };
-static const uint16_t PAT_APPROVE[]   = { 40, 0 };
-static const uint16_t PAT_DENY[]      = { 150, 0 };
-static const uint16_t PAT_CELEBRATE[] = { 60, 50, 60, 50, 60, 0 };
+// Haptic patterns: on/off durations in ms (even index = motor ON, odd = OFF),
+// zero-terminated. The motor has its own LEDC channel (VIBRATE_CH, separate from
+// the beep's ch0), so patterns play uninterrupted and multi-pulse + per-step
+// amplitude both work. Tuned on the actual coin/ERM motor:
+//   approve / deny — identical bare blip (length is imperceptible on this motor;
+//                    the beep tone + knowing which button you pressed distinguish
+//                    them). Flat amp via vibratePatternAmp(.., VIB_*_AMP).
+//   attention      — low-low-HIGH rising (two soft taps then a strong accent).
+//   celebrate      — HIGH-low-HIGH-low siren (insistent, opposite shape to attn).
+//   connect        — two clear pulses, the "linked up" cue.
+// attention/celebrate use the parallel amplitude array (one value per ON step).
+static const uint16_t PAT_APPROVE[]       = { 60, 0 };
+static const uint16_t PAT_DENY[]          = { 60, 0 };
+static const uint16_t PAT_ATTENTION[]     = { 90, 80, 90, 80, 160, 0 };
+static const uint8_t  PAT_ATTENTION_AMP[] = { 115, 115, 255 };              // low, low, HIGH
+static const uint16_t PAT_CELEBRATE[]     = { 130, 90, 130, 90, 130, 90, 130, 0 };
+static const uint8_t  PAT_CELEBRATE_AMP[] = { 255, 100, 255, 100, 255, 100, 255 };  // high-low siren
+static const uint16_t PAT_CONNECT[]   = { 90, 80, 160, 0 };                 // two clear pulses "linked up"
 
 static const uint16_t* _vibPat  = nullptr;
+static const uint8_t*  _vibAmpArr = nullptr;  // optional per-ON-step amplitude (parallel to _vibPat)
 static uint8_t         _vibStep = 0;
 static uint32_t        _vibNext = 0;
+static uint8_t         _vibAmp  = 255;   // flat amplitude when _vibAmpArr is null
 
-static void vibratePattern(const uint16_t* pat) {
+// Amplitudes (PWM duty, 0-255). The motor needs a meaningful duty to register;
+// a single from-rest blip is felt around 100, while attention/celebrate carry
+// their own per-step amplitude arrays (lows ~115, highs 255). VIB_FULL is the
+// default for the amp-array path's non-array fields.
+static const uint8_t VIB_FULL        = 255;
+static const uint8_t VIB_APPROVE_AMP = 100;  // bare blip
+static const uint8_t VIB_DENY_AMP    = 100;  // bare blip (identical to approve; beep tone differs)
+
+// Play with a flat amplitude across all ON steps. If a pattern is already
+// playing, the new request is IGNORED so it can finish — otherwise overlapping
+// triggers (e.g. the connect haptic + a state-change celebrate/attention firing
+// in the same instant on connection) stomp each other, restarting the player
+// mid-pattern and feeling like garbled double-buzzes. First trigger wins.
+static void vibratePatternAmp(const uint16_t* pat, uint8_t amp) {
   if (!settings().vibrate) return;
+  if (_vibPat) return;            // already playing — don't interrupt
   _vibPat  = pat;
+  _vibAmpArr = nullptr;
   _vibStep = 0;
+  _vibAmp  = amp;
   _vibNext = millis();  // start immediately
+}
+
+// Play with a per-ON-step amplitude array (e.g. low/high alternation). ampArr
+// is indexed by ON step (step/2), parallel to the ON durations in pat.
+static void vibratePatternAmpArr(const uint16_t* pat, const uint8_t* ampArr) {
+  if (!settings().vibrate) return;
+  if (_vibPat) return;            // already playing — don't interrupt
+  _vibPat  = pat;
+  _vibAmpArr = ampArr;
+  _vibStep = 0;
+  _vibAmp  = VIB_FULL;
+  _vibNext = millis();
 }
 
 // Call once per loop() — advances the pattern state machine.
@@ -59,9 +102,14 @@ static void vibrateTick(uint32_t now) {
   if (_vibPat[_vibStep] == 0) {
     ledcWrite(VIBRATE_CH, 0);
     _vibPat = nullptr;
+    _vibAmpArr = nullptr;
     return;
   }
-  ledcWrite(VIBRATE_CH, (_vibStep % 2 == 0) ? 200 : 0);
+  uint8_t amp = 0;
+  if (_vibStep % 2 == 0) {  // ON step
+    amp = _vibAmpArr ? _vibAmpArr[_vibStep / 2] : _vibAmp;
+  }
+  ledcWrite(VIBRATE_CH, amp);
   _vibNext = now + _vibPat[_vibStep++];
 }
 
@@ -262,8 +310,8 @@ const uint8_t MENU_N = 6;
 
 bool    settingsOpen = false;
 uint8_t settingsSel  = 0;
-const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "12hr", "sleep", "ascii pet", "reset", "back" };
-const uint8_t SETTINGS_N = 13;
+const char* settingsItems[] = { "brightness", "sound", "vibrate", "bluetooth", "wifi", "led", "transcript", "clock rot", "wrist", "12hr", "sleep", "pet", "reset", "back" };
+const uint8_t SETTINGS_N = 14;
 
 bool    resetOpen = false;
 uint8_t resetSel  = 0;
@@ -292,11 +340,12 @@ static void applySetting(uint8_t idx) {
     case 5: s.led = !s.led; break;
     case 6: s.hud = !s.hud; break;
     case 7: s.clockRot = (s.clockRot + 1) % 3; break;
-    case 8: s.ampm = !s.ampm; break;
-    case 9: s.sleepIdx = (s.sleepIdx + 1) % SLEEP_TIMEOUT_N; break;  // off/5m/15m/30m/60m
-    case 10: nextPet(); return;
-    case 11: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
-    case 12: settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); return;
+    case 8: s.rightWrist = !s.rightWrist; break;   // left=portrait rot 0, right=rot 2 (180°)
+    case 9: s.ampm = !s.ampm; break;
+    case 10: s.sleepIdx = (s.sleepIdx + 1) % SLEEP_TIMEOUT_N; break;  // off/5m/15m/30m/60m
+    case 11: nextPet(); return;
+    case 12: resetOpen = true; resetSel = 0; resetConfirmIdx = 0xFF; return;
+    case 13: settingsOpen = false; spr.fillSprite(characterPalette().bg); characterInvalidate(); if (buddyMode) buddyInvalidate(); return;
   }
   settingsSave();
 }
@@ -374,22 +423,36 @@ static void drawMenuHints(const Palette& p, int mx, int mw, int hy,
   spr.fillTriangle(x, hy, x, hy + 6, x + 5, hy + 3, p.textDim);
 }
 
+// Settings list scrolls in a fixed viewport: the item count outgrew the
+// 240px screen, so we show SETTINGS_VIS rows and keep the selected row in view.
+static const uint8_t SETTINGS_VIS = 8;
+static uint8_t settingsScroll = 0;
+
 static void drawSettings() {
   const Palette& p = characterPalette();
-  int mw = 118, mh = 16 + SETTINGS_N * 14 + MENU_HINT_H;
+  // Keep the selected item within the visible window [scroll, scroll+VIS).
+  if (settingsSel < settingsScroll) settingsScroll = settingsSel;
+  else if (settingsSel >= settingsScroll + SETTINGS_VIS) settingsScroll = settingsSel - SETTINGS_VIS + 1;
+  uint8_t visN = SETTINGS_N < SETTINGS_VIS ? SETTINGS_N : SETTINGS_VIS;
+
+  int mw = 118, mh = 16 + visN * 14 + MENU_HINT_H;
   int mx = (W - mw) / 2, my = (H - mh) / 2;
   spr.fillRoundRect(mx, my, mw, mh, 4, PANEL);
   spr.drawRoundRect(mx, my, mw, mh, 4, p.textDim);
   spr.setTextSize(1);
   Settings& s = settings();
   bool vals[] = { s.sound, s.vibrate, s.bt, s.wifi, s.led, s.hud };
-  for (int i = 0; i < SETTINGS_N; i++) {
+
+  for (uint8_t row = 0; row < visN; row++) {
+    int i = settingsScroll + row;
+    if (i >= SETTINGS_N) break;
+    int y = my + 8 + row * 14;
     bool sel = (i == settingsSel);
     spr.setTextColor(sel ? p.text : p.textDim, PANEL);
-    spr.setCursor(mx + 6, my + 8 + i * 14);
+    spr.setCursor(mx + 6, y);
     spr.print(sel ? "> " : "  ");
     spr.print(settingsItems[i]);
-    spr.setCursor(mx + mw - 36, my + 8 + i * 14);
+    spr.setCursor(mx + mw - 36, y);
     spr.setTextColor(p.textDim, PANEL);
     if (i == 0) {
       spr.printf("%u/4", brightLevel);
@@ -400,15 +463,32 @@ static void drawSettings() {
       static const char* const RN[] = { "auto", "port", "land" };
       spr.print(RN[s.clockRot]);
     } else if (i == 8) {
+      spr.print(s.rightWrist ? "right" : "left");
+    } else if (i == 9) {
       spr.setTextColor(s.ampm ? GREEN : p.textDim, PANEL);
       spr.print(s.ampm ? " on" : "off");
-    } else if (i == 9) {
+    } else if (i == 10) {
       spr.setTextColor(s.sleepIdx == 0 ? p.textDim : GREEN, PANEL);
       spr.print(SLEEP_TIMEOUT_LABELS[s.sleepIdx]);
-    } else if (i == 10) {
-      spr.print(buddyMode ? buddySpeciesName() : "gif");
+    } else if (i == 11) {
+      // Pet species name, truncated to the ~5-char right column so it doesn't
+      // spill into the label (e.g. "capybara" → "capyb").
+      if (!buddyMode) { spr.print("gif"); }
+      else {
+        char nm[6];
+        snprintf(nm, sizeof(nm), "%s", buddySpeciesName());
+        spr.print(nm);
+      }
+    } else if (i == 13) {  // brightness (moved down)
+      spr.printf("%u/4", brightLevel);
     }
   }
+
+  // Scroll affordance: up/down arrows when there are items off-screen.
+  spr.setTextColor(p.text, PANEL);
+  if (settingsScroll > 0) { spr.setCursor(mx + mw - 10, my + 4); spr.print("\x18"); }            // ▲
+  if (settingsScroll + visN < SETTINGS_N) { spr.setCursor(mx + mw - 10, my + mh - MENU_HINT_H - 10); spr.print("\x19"); }  // ▼
+
   drawMenuHints(p, mx, mw, my + mh - 12, "Next", "Change");
 }
 
@@ -476,6 +556,54 @@ void drawMenu() {
 static uint8_t clockOrient   = 0;
 static int8_t  orientFrames  = 0;
 static uint8_t paintedOrient = 0;
+
+// Portrait base rotation depends on which wrist it's worn on: left = 0 (USB at
+// bottom), right = 2 (180° flipped, USB at top). Landscape (clockOrient 1/3)
+// already auto-flips by gravity so it's wrist-agnostic — only portrait needs
+// this. Maps a logical orientation to the physical M5.Lcd rotation.
+static uint8_t portraitRot() { return settings().rightWrist ? 2 : 0; }
+static uint8_t physRotation(uint8_t orient) { return orient == 0 ? portraitRot() : orient; }
+
+// Push the portrait sprite to the LCD. pushSprite ignores M5.Lcd rotation (it
+// blits raw to 0,0), so for right-wrist wear we rotate the whole frame 180°
+// via pushRotated (pivot set to screen centre at createSprite). Left wrist =
+// the cheap straight blit.
+static void pushFrame() {
+  if (settings().rightWrist) {
+    // pushRotated places the sprite's pivot onto the LCD's pivot. Set BOTH to
+    // the screen centre (LCD at rotation 0 = 135x240) so the 180° frame lands
+    // centred, not offset. (The sprite pivot is also set at createSprite.)
+    M5.Lcd.setRotation(0);
+    M5.Lcd.setPivot(W / 2.0f, H / 2.0f);
+    spr.pushRotated(180);
+  } else {
+    spr.pushSprite(0, 0);
+  }
+}
+
+// --- Side-button role mapping (right-wrist swap) -------------------------
+// On the right wrist the screen is flipped 180°, so the two SIDE buttons —
+// BtnB and the AXP power button — are physically at each other's old position
+// relative to the UI. When rightWrist is set we swap their LOGICAL roles so
+// pressing the button that's physically "where deny used to be" still denies,
+// and the one "where power used to be" still powers.
+//
+// AXP GetBtnPress() is CONSUMED on read, so it must be read exactly once per
+// loop; powerPollLatch caches that single read for all role accessors below.
+static bool powerPollLatch = false;
+static void buttonsPoll() { powerPollLatch = (M5.Axp.GetBtnPress() == 0x02); }
+
+// Logical "power" short-press (wake / screen-off toggle). Physically the power
+// button on left wrist, BtnB on right wrist.
+static bool powerRolePressed() {
+  return settings().rightWrist ? M5.BtnB.wasPressed() : powerPollLatch;
+}
+// Logical "B" press (deny / menu confirm / heart). Physically BtnB on left
+// wrist, the power button on right wrist.
+static bool bRolePressed() {
+  return settings().rightWrist ? powerPollLatch : M5.BtnB.wasPressed();
+}
+
 // RTC and IMU share an I2C bus. Reading the RTC at 60fps starves the IMU
 // reads in clockUpdateOrient — orientation detection gets noisy. Cache the
 // time once per second; mood logic and drawClock both read from here.
@@ -575,7 +703,7 @@ static void drawClock() {
   // Landscape: 240×135 direct-to-LCD. Full fill only on entry; after that
   // text glyph bg cells repaint themselves and the pet box (small, ~90×50)
   // gets a fillRect each pet tick — small enough not to tear.
-  M5.Lcd.setRotation(clockOrient);
+  M5.Lcd.setRotation(physRotation(clockOrient));
   static uint8_t lastSec = 0xFF;
   bool repaint = paintedOrient != clockOrient;
   if (repaint) { M5.Lcd.fillScreen(p.bg); paintedOrient = clockOrient; lastSec = 0xFF; }
@@ -617,7 +745,7 @@ static void drawClock() {
       characterRenderTo(&M5.Lcd, 57, 45);
     }
   }
-  M5.Lcd.setRotation(0);
+  M5.Lcd.setRotation(portraitRot());
 }
 
 PersonaState derive(const TamaState& s) {
@@ -1099,6 +1227,7 @@ void setup() {
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.createSprite(W, H);
+  spr.setPivot(W / 2.0f, H / 2.0f);  // centre pivot for the right-wrist 180° flip
   characterInit(nullptr);  // scan /characters/ for whatever is installed
   gifAvailable = characterLoaded();
   // species NVS: 0..N-1 = ASCII species, 0xFF = use GIF (also the default,
@@ -1125,7 +1254,7 @@ void setup() {
       spr.drawString("a buddy appears", W/2, H/2 + 12);
     }
     spr.setTextDatum(TL_DATUM); spr.setTextSize(1);
-    spr.pushSprite(0, 0);
+    pushFrame();
     delay(1800);
   }
 
@@ -1134,12 +1263,16 @@ void setup() {
 
 void loop() {
   M5.update();
+  buttonsPoll();   // read AXP power button once (consumed on read); roles below
   M5.Beep.update();
   t++;
   uint32_t now = millis();
 
   dataPoll(&tama);
-  if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
+  if (statsPollLevelUp()) {
+    triggerOneShot(P_CELEBRATE, 3000);              // celebrate animation
+    vibratePatternAmpArr(PAT_CELEBRATE, PAT_CELEBRATE_AMP);  // haptic ONLY on level-up
+  }
   baseState = derive(tama);
 
   // After waking the screen, hold sleep for 12s so users see the wake-up
@@ -1155,12 +1288,58 @@ void loop() {
     digitalWrite(LED_PIN, HIGH);
   }
 
-  // Vibration HAT: fire pattern on state entry, tick the player each loop
-  if (activeState != prevActive) {
-    if (activeState == P_ATTENTION) vibratePattern(PAT_ATTENTION);
-    else if (activeState == P_CELEBRATE)  vibratePattern(PAT_CELEBRATE);
-    prevActive = activeState;
+  // Connection haptic: buzz the "linked up" cue when the daemon link comes up.
+  // Debounced — only fires if we'd been disconnected for >CONNECT_DEBOUNCE_MS,
+  // so a brief flap doesn't re-announce. We also track the BLE-link edge
+  // (bleConn) here; the attention edge-detector below uses it to open a settle
+  // window, so a stale "waiting" flag arriving late on the first post-connect
+  // heartbeat isn't mistaken for a fresh prompt.
+  static const uint32_t CONNECT_DEBOUNCE_MS = 10000;
+  static bool wasDataConn = false;
+  static uint32_t disconnSinceMs = 0;
+  static bool wasBleConn = false;
+  bool bleConn = bleConnected();
+
+  bool dataConn = dataConnected();
+  if (dataConn && !wasDataConn) {
+    if (disconnSinceMs == 0 || now - disconnSinceMs > CONNECT_DEBOUNCE_MS) {
+      vibratePatternAmp(PAT_CONNECT, 150);   // gentle but above the perceptibility floor
+    }
+  } else if (!dataConn && wasDataConn) {
+    disconnSinceMs = now;   // mark when the link dropped
   }
+  wasDataConn = dataConn;
+
+  // Vibration HAT: fire on a genuine NEW event, detected as a rising edge of the
+  // underlying daemon DATA (sessionsWaiting / recentlyCompleted), NOT the derived
+  // activeState. CELEBRATE is NOT triggered here — it fires ONLY on level-up
+  // (see statsPollLevelUp above). Triggering celebrate on every turn-completion
+  // (recentlyCompleted) buzzed on every Claude response and also muddied the
+  // reconnect debugging (response-celebrates looked like reconnect-celebrates).
+  // Only ATTENTION (a waiting prompt) is edge-detected here.
+  static bool prevWaiting = false;
+  static uint32_t connSettleUntil = 0;
+  bool nowWaiting = tama.sessionsWaiting > 0;
+  if (bleConn && !wasBleConn) {
+    // Link just (re)established: seed baseline + settle window so a stale
+    // "waiting" flag arriving late on the first heartbeat isn't a fresh edge.
+    prevWaiting = nowWaiting;
+    connSettleUntil = now + 12000;
+  }
+  bool settling = (int32_t)(now - connSettleUntil) < 0;
+  static const uint32_t ATTN_COOLDOWN_MS = 20000;   // at most once / 20s
+  static uint32_t lastAttnMs = 0;
+  if (settling) {
+    prevWaiting = nowWaiting;   // swallow edges while post-connect state settles
+  } else {
+    if (nowWaiting && !prevWaiting && (lastAttnMs == 0 || now - lastAttnMs > ATTN_COOLDOWN_MS)) {
+      vibratePatternAmpArr(PAT_ATTENTION, PAT_ATTENTION_AMP);
+      lastAttnMs = now;
+    }
+    prevWaiting = nowWaiting;
+  }
+  wasBleConn = bleConn;       // track BLE-link edge (used above for the settle window)
+  prevActive = activeState;   // keep in sync (visual state still uses it)
   vibrateTick(now);
 
   // shake → dizzy + force scenario advance
@@ -1205,10 +1384,16 @@ void loop() {
     }
     wake();
   }
+  // Also count the AXP power button as interaction. On the right wrist it's the
+  // B-role (deny/menu), so without this the screen-off timer wouldn't reset on
+  // B presses and would time out mid-menu. Use the cached powerPollLatch +
+  // non-consuming isPressed() so we don't eat the wasPressed() edge the role
+  // handlers below rely on.
+  if (powerPollLatch || M5.BtnB.isPressed()) lastInteractMs = millis();
 
   // AXP power button (left side): short-press toggles screen off.
   // Long-press (2.5s) powers off via AXP hardware (register 0x32 bit 6).
-  if (M5.Axp.GetBtnPress() == 0x02) {
+  if (powerRolePressed()) {
     if (screenOff) {
       wake();
     } else {
@@ -1239,7 +1424,7 @@ void loop() {
         uint32_t tookS = (millis() - promptArrivedMs) / 1000;
         statsOnApproval(tookS);
         beep(2400, 60);
-        vibratePattern(PAT_APPROVE);
+        vibratePatternAmp(PAT_APPROVE, VIB_APPROVE_AMP);
         if (tookS < 5) triggerOneShot(P_HEART, 2000);
       } else if (resetOpen) {
         beep(1800, 30);
@@ -1261,8 +1446,9 @@ void loop() {
     swallowBtnA = false;
   }
 
-  // BtnB: pet → heart
-  if (M5.BtnB.wasPressed()) {
+  // B-role: deny / menu confirm / pet → heart. Physical source swaps with the
+  // power button on the right wrist (see bRolePressed).
+  if (bRolePressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
     else
     if (inPrompt) {
@@ -1272,7 +1458,7 @@ void loop() {
       responseSent = true;
       statsOnDenial();
       beep(600, 60);
-      vibratePattern(PAT_DENY);
+      vibratePatternAmp(PAT_DENY, VIB_DENY_AMP);
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);
@@ -1383,7 +1569,7 @@ void loop() {
     if (resetOpen) drawReset();
     else if (settingsOpen) drawSettings();
     else if (menuOpen) drawMenu();
-    spr.pushSprite(0, 0);
+    pushFrame();
   }
 
   // Face-down nap: dim immediately, pause animations, accumulate sleep time.
