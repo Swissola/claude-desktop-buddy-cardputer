@@ -39,24 +39,31 @@ static TFT_eSPI* _tgt = &spr;
 // and re-center per line so the padding doesn't push ink off-screen.
 static uint8_t _scale = 1;
 
-void buddyPrintLine(const char* line, int yPx, uint16_t color, int xOff) {
-  int len = strlen(line);
-  if (_scale > 1) {
-    while (len && line[len-1] == ' ') len--;
-    while (len && *line == ' ')       { line++; len--; }
-  }
-  int w = len * BUDDY_CHAR_W * _scale;
-  int x = BUDDY_X_CENTER - w / 2 + xOff * _scale;
+// Print one row at a given pixel x/y, padding preserved (no per-row centring).
+static void buddyPrintRowAt(const char* line, int xPx, int yPx, uint16_t color) {
   _tgt->setTextColor(color, BUDDY_BG);
-  _tgt->setCursor(x, yPx);
-  for (int i = 0; i < len; i++) _tgt->print(line[i]);
+  _tgt->setCursor(xPx, yPx);
+  for (const char* p = line; *p; ++p) _tgt->print(*p);
 }
 
 void buddyPrintSprite(const char* const* lines, uint8_t nLines, int yOffset, uint16_t color, int xOff) {
   _tgt->setTextSize(_scale);
   int yBase = BUDDY_Y_BASE * _scale - (_scale - 1) * 14;
+  // Centre the WHOLE block as a unit on its widest row, then draw every row at
+  // that same left edge with its padding intact. Previously each row was
+  // trimmed and re-centred independently (only at 2x), so rows of differing
+  // widths landed at different x and the body's inter-row alignment broke —
+  // the "middle section misaligned" seen on every pet at the home (2x) view.
+  int maxLen = 0;
   for (uint8_t i = 0; i < nLines; i++) {
-    buddyPrintLine(lines[i], yBase + (yOffset + i * BUDDY_CHAR_H) * _scale, color, xOff);
+    int len = (int)strlen(lines[i]);
+    if (len > maxLen) maxLen = len;
+  }
+  int blockW = maxLen * BUDDY_CHAR_W * _scale;
+  int xLeft = BUDDY_X_CENTER - blockW / 2 + xOff * _scale;
+  for (uint8_t i = 0; i < nLines; i++) {
+    buddyPrintRowAt(lines[i], xLeft,
+                    yBase + (yOffset + i * BUDDY_CHAR_H) * _scale, color);
   }
 }
 

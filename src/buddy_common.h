@@ -25,10 +25,9 @@ extern const uint16_t BUDDY_PURPLE;
 extern const uint16_t BUDDY_RED;
 extern const uint16_t BUDDY_BLUE;
 
-// Print one line centered around BUDDY_X_CENTER, optionally x-offset.
-void buddyPrintLine(const char* line, int yPx, uint16_t color, int xOff = 0);
-
 // Print N-line sprite block. yOffset is added to BUDDY_Y_BASE for the top row.
+// The block is centred as a unit on its widest row; each row keeps its padding
+// so the art's inter-row alignment is preserved identically at 1x and 2x.
 void buddyPrintSprite(const char* const* lines, uint8_t nLines, int yOffset, uint16_t color, int xOff = 0);
 
 // Set sprite text color directly + cursor (for ad-hoc particle drawing).
