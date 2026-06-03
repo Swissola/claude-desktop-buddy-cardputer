@@ -296,3 +296,66 @@ inline void speciesIdxSave(uint8_t idx) {
 inline Settings& settings() { return _settings; }
 
 inline const Stats& stats() { return _stats; }
+
+// ---- Battery gauge (AXP192 coulomb counter) ------------------------------
+// The old gauge was a crude linear voltage map (vBat-3200)/10, which jumps on
+// load changes and reads charge-inflated right off the charger. The AXP192 has
+// a hardware coulomb counter that integrates actual current in/out — accurate
+// and stable. We calibrate a baseline at a detected FULL charge: snapshot the
+// counter's net-mAh reading as "100%", persist it to NVS, and thereafter report
+// pct = 100 - (baseline - nowMAh)/CAPACITY*100. Falls back to the voltage
+// estimate until calibrated. Re-calibrates on every full charge (self-correcting
+// against coulomb drift, since the watch is charged regularly).
+static const float   BATT_CAPACITY_MAH = 120.0f;   // M5StickC Plus ~120mAh cell
+static float         _battFullCoulomb  = 0.0f;      // GetCoulombData() at last full charge
+static bool          _battCalibrated   = false;
+
+inline void batteryInit() {
+  M5.Axp.EnableCoulombcounter();
+  _prefs.begin("buddy", true);
+  _battFullCoulomb = _prefs.getFloat("cb_full", 0.0f);
+  _battCalibrated  = _prefs.getBool("cb_cal", false);
+  _prefs.end();
+}
+
+// True when the charger has topped the cell off (USB present, high voltage, and
+// charge current tapered to near zero — the constant-voltage tail).
+inline bool batteryFull() {
+  bool usb = M5.Axp.GetVBusVoltage() > 4.0f;
+  int  mV  = (int)(M5.Axp.GetBatVoltage() * 1000);
+  int  mA  = (int)M5.Axp.GetBatCurrent();
+  return usb && mV > 4100 && mA < 10;
+}
+
+// Voltage-based fallback (the old estimate) for use before calibration.
+inline int batteryPctVoltage() {
+  int mV = (int)(M5.Axp.GetBatVoltage() * 1000);
+  int pct = (mV - 3200) / 10;
+  if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+  return pct;
+}
+
+// Call periodically. When full is detected, (re)calibrate the coulomb baseline.
+inline void batteryTick() {
+  if (batteryFull()) {
+    float c = M5.Axp.GetCoulombData();
+    // Only rewrite NVS if the baseline moved meaningfully (avoid flash wear).
+    if (!_battCalibrated || fabsf(c - _battFullCoulomb) > 2.0f) {
+      _battFullCoulomb = c;
+      _battCalibrated  = true;
+      _prefs.begin("buddy", false);
+      _prefs.putFloat("cb_full", _battFullCoulomb);
+      _prefs.putBool("cb_cal", true);
+      _prefs.end();
+    }
+  }
+}
+
+// Battery percentage, coulomb-based once calibrated, else voltage fallback.
+inline int batteryPct() {
+  if (!_battCalibrated) return batteryPctVoltage();
+  float drained = _battFullCoulomb - M5.Axp.GetCoulombData();   // mAh used since full
+  int pct = (int)lroundf(100.0f - (drained / BATT_CAPACITY_MAH) * 100.0f);
+  if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+  return pct;
+}

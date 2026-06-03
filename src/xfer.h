@@ -115,8 +115,7 @@ inline bool xferCommand(JsonDocument& doc) {
     int vBat = (int)(M5.Axp.GetBatVoltage() * 1000);
     int iBat = (int)M5.Axp.GetBatCurrent();
     int vBus = (int)(M5.Axp.GetVBusVoltage() * 1000);
-    int pct = (vBat - 3200) / 10;
-    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+    int pct = batteryPct();   // coulomb-counter gauge (voltage fallback until calibrated)
     char b[320];
     int len = snprintf(b, sizeof(b),
       "{\"ack\":\"status\",\"ok\":true,\"n\":0,\"data\":{"
