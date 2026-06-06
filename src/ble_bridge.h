@@ -16,6 +16,8 @@
 
 void bleInit(const char* deviceName);
 void bleDisconnect();              // disconnect current client
+void bleStopAdvertising();         // silence advertising for deep idle-sleep
+void bleStartAdvertising();        // restart advertising on wake
 bool bleConnected();
 // True once LE Secure Connections bonding has completed for the current
 // link. The NUS characteristics are encrypted-only, so in practice this

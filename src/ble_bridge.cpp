@@ -36,6 +36,12 @@ static volatile uint16_t  mtu = 23;
 static esp_bd_addr_t      peerAddr;
 static volatile bool      hasPeer = false;
 
+// Set true while the device is in deep idle-sleep: suppresses the automatic
+// advertising restart in onDisconnect so the radio goes fully quiet during
+// sleep (advertising is a continuous idle drain). Cleared and advertising is
+// explicitly restarted by bleStartAdvertising() on wake.
+static volatile bool      idleSilenced = false;
+
 static void rxPush(const uint8_t* p, size_t n) {
   for (size_t i = 0; i < n; i++) {
     size_t next = (rxHead + 1) % RX_CAP;
@@ -69,8 +75,12 @@ class ServerCallbacks : public BLEServerCallbacks {
     mtu = 23;
     hasPeer = false;
     Serial.println("[ble] disconnected");
-    // Restart advertising so the next client can find us.
-    BLEDevice::startAdvertising();
+    // Restart advertising so the next client can find us — UNLESS we're entering
+    // deep idle-sleep, where we deliberately keep the radio silent to save power
+    // (bleStartAdvertising() re-enables it on wake).
+    if (!idleSilenced) {
+      BLEDevice::startAdvertising();
+    }
   }
   void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
     mtu = param->mtu.mtu;
@@ -155,6 +165,26 @@ void bleInit(const char* deviceName) {
 
 void bleDisconnect() {
   if (server && connected) server->disconnect(server->getConnId());
+}
+
+// Stop advertising for deep idle-sleep. Sets idleSilenced so the onDisconnect
+// callback won't auto-restart it. The radio goes quiet — no advertisement
+// packets — which removes the continuous idle drain.
+void bleStopAdvertising() {
+  idleSilenced = true;
+  BLEDevice::stopAdvertising();
+  Serial.println("[ble] advertising stopped (idle sleep)");
+}
+
+// Restart advertising on wake. Clears idleSilenced first so a subsequent
+// disconnect behaves normally again. NOTE: Arduino-Bluedroid advertising
+// restart has historically been unreliable on this device — if reconnect
+// proves flaky after sleep, the fallback is a reboot-on-wake (guaranteed fresh
+// advertising). Trying the clean restart first.
+void bleStartAdvertising() {
+  idleSilenced = false;
+  BLEDevice::startAdvertising();
+  Serial.println("[ble] advertising restarted (wake)");
 }
 
 bool bleConnected() { return connected; }

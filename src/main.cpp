@@ -227,13 +227,14 @@ bool     responseSent = false;
 // plus a periodic timer so we resume to re-poll the AXP power button (on I2C,
 // can't GPIO-wake) and let the main loop re-evaluate. Returns true if a button
 // caused the wake (caller then wake()s the screen).
-// 15s re-poll. The timer wake exists only to re-check the AXP power button
+// 60s re-poll. The timer wake exists only to re-check the AXP power button
 // (I2C, can't GPIO-wake) for a hold-to-power-off. At 2s the chip woke 30x/min —
 // each wake is a full CPU spin-up + I2C read, which dominated idle draw and
-// kept "light sleep" at ~11.5%/hr. 15s cuts that overhead ~7x. The buttons (A/B)
-// still wake instantly via GPIO; only the power-button-off check is delayed —
-// holding power-off now registers within 15s instead of 2s, which is fine.
-static const uint32_t LIGHT_SLEEP_TIMER_US = 15UL * 1000UL * 1000UL;
+// kept "light sleep" at ~11.5%/hr. Combined with the top-of-loop fast path
+// (timer wakes now skip the whole loop body), 60s cuts wake overhead ~30x vs
+// the original 2s. Buttons (A/B) still wake instantly via GPIO; only the
+// power-button-off check is delayed — holding power-off registers within 60s.
+static const uint32_t LIGHT_SLEEP_TIMER_US = 60UL * 1000UL * 1000UL;
 
 // MPU6886 IMU sits on a rail that stays powered during light sleep and draws
 // ~1-3mA running. Put it in its low-power sleep mode (PWR_MGMT_1 bit6) before
@@ -247,18 +248,28 @@ static void imuSleep() {
 }
 
 // Enter the low-power idle state: cut the LCD rails (LDO2 backlight + LDO3 panel
-// logic) via the AXP's SetSleep (keeps DCDC1=ESP32 + LDO1=RTC), and sleep the
-// IMU. Called once when entering bleIdleSleep. Restored by idlePowerRestore()
-// from wake(). NOTE: we deliberately do NOT stop BLE advertising here — this
-// project previously found Arduino-Bluedroid advertising restart unreliable
-// (would not re-advertise cleanly, breaking reconnect). Rails + IMU are the
-// safe, proven power wins; revisit advertising only if more saving is needed.
+// logic) via the AXP's SetSleep (keeps DCDC1=ESP32 + LDO1=RTC), sleep the IMU,
+// and stop BLE advertising. Called once when entering bleIdleSleep. Restored by
+// idlePowerRestore() from wake().
+//
+// Advertising-off is the suspected big idle win: Fix #1/#2 (cheap timer wake)
+// barely moved drain (~12.4%/hr), proving the sink is CONTINUOUS, not the
+// periodic CPU wakes — and continuous advertising is the prime suspect. Earlier
+// sessions flagged Arduino-Bluedroid advertising RESTART as unreliable, so the
+// risk here is reconnect: bleStartAdvertising() must bring the radio back
+// cleanly on wake. If reconnect proves flaky in testing, the fallback is a
+// reboot-on-wake (guaranteed fresh advertising).
 static void idlePowerDown() {
   M5.Axp.SetSleep();   // reg 0x12 &= 0xA1 — disables LDO2/LDO3, keeps DCDC1+LDO1
   imuSleep();
+  bleStopAdvertising();   // silence the radio — advertising is a continuous
+                          // idle drain and nothing is listening while asleep.
 }
 
 static void idlePowerRestore() {
+  bleStartAdvertising();                  // bring the radio back FIRST so the
+                                          // daemon can find us while the screen
+                                          // restores
   M5.Axp.WakeUpDisplayAfterLightSleep();  // re-enable Ext/LDO3/LDO2/DCDC1
   M5.Imu.Init();                          // wake + re-init the IMU
 }
@@ -1264,6 +1275,24 @@ void setup() {
 void loop() {
   M5.update();
   buttonsPoll();   // read AXP power button once (consumed on read); roles below
+
+  // Deep-idle fast path: when BLE-disconnected idle-sleeping, sleep and — on a
+  // periodic TIMER wake — immediately re-sleep WITHOUT running the heavy loop
+  // body (state derive, draw, IMU poll, coulomb tick). That body got heavier
+  // over time and re-running it 4x/min during "light sleep" was the real idle
+  // drain (regressed ~8.4%/hr -> ~11%/hr). Now a timer wake only re-checks the
+  // AXP power button (hold-to-off) then sleeps again; only a BUTTON wake falls
+  // through to wake() + the full loop. Keeps idle truly light.
+  if (screenOff && bleIdleSleep) {
+    bool btnWoke = lightSleepUntilEvent();
+    M5.update();
+    if (!btnWoke && !M5.BtnA.wasPressed() && !M5.BtnB.wasPressed()
+        && M5.Axp.GetBtnPress() != 0x02) {
+      return;   // timer wake — nothing to do, straight back to sleep
+    }
+    wake();     // a button woke us: restore and run the loop normally
+  }
+
   M5.Beep.update();
   t++;
   uint32_t now = millis();
@@ -1633,17 +1662,10 @@ void loop() {
     Serial.println("[pm] BLE idle — disconnected, rails+IMU off, light sleeping");
   }
 
-  if (screenOff && bleIdleSleep) {
-    // Deep idle: BLE already disconnected, so real light sleep is safe and
-    // sips power (vs the delay() busy-loop that kept the core awake at ~46%/hr).
-    // Wakes on a button or the 2s re-poll timer.
-    bool btnWoke = lightSleepUntilEvent();
-    M5.update();
-    if (btnWoke || M5.BtnA.wasPressed() || M5.BtnB.wasPressed()
-        || M5.Axp.GetBtnPress() == 0x02) {
-      wake();
-    }
-  } else if (screenOff) {
+  // Deep-idle (screenOff && bleIdleSleep) is handled by the fast path at the TOP
+  // of loop(): once idlePowerDown() above sets bleIdleSleep, the next iteration
+  // light-sleeps there and only the heavy body is skipped on timer wakes.
+  if (screenOff) {
     // Screen off but STILL CONNECTED — can't light-sleep (would drop BLE), so
     // keep the chunked busy-poll. Break idle into 50ms chunks so button presses
     // are caught promptly. M5.update() at the top of loop() reads button state.
