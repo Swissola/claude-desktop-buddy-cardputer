@@ -42,6 +42,13 @@ static volatile bool      hasPeer = false;
 // explicitly restarted by bleStartAdvertising() on wake.
 static volatile bool      idleSilenced = false;
 
+// Set by onDisconnect, actioned by bleService() from the main loop. Restarting
+// advertising from INSIDE the onDisconnect callback context can crash the BLE
+// stack when the disconnect is abrupt (e.g. the central vanished / a radio
+// reset tore the link mid-teardown) — the stack is still unwinding. Deferring
+// the startAdvertising() call to the next main-loop tick avoids that.
+static volatile bool      wantAdvRestart = false;
+
 static void rxPush(const uint8_t* p, size_t n) {
   for (size_t i = 0; i < n; i++) {
     size_t next = (rxHead + 1) % RX_CAP;
@@ -77,9 +84,11 @@ class ServerCallbacks : public BLEServerCallbacks {
     Serial.println("[ble] disconnected");
     // Restart advertising so the next client can find us — UNLESS we're entering
     // deep idle-sleep, where we deliberately keep the radio silent to save power
-    // (bleStartAdvertising() re-enables it on wake).
+    // (bleStartAdvertising() re-enables it on wake). Defer the actual restart to
+    // bleService() on the next main-loop tick: calling startAdvertising() here,
+    // inside the disconnect callback, can crash on an abrupt disconnect.
     if (!idleSilenced) {
-      BLEDevice::startAdvertising();
+      wantAdvRestart = true;
     }
   }
   void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
@@ -183,8 +192,19 @@ void bleStopAdvertising() {
 // advertising). Trying the clean restart first.
 void bleStartAdvertising() {
   idleSilenced = false;
+  wantAdvRestart = false;   // explicit restart supersedes any pending deferred one
   BLEDevice::startAdvertising();
   Serial.println("[ble] advertising restarted (wake)");
+}
+
+// Call once per main-loop iteration. Performs the deferred advertising restart
+// requested by onDisconnect, safely outside the disconnect-callback context.
+void bleService() {
+  if (wantAdvRestart && !idleSilenced) {
+    wantAdvRestart = false;
+    BLEDevice::startAdvertising();
+    Serial.println("[ble] advertising restarted (post-disconnect)");
+  }
 }
 
 bool bleConnected() { return connected; }

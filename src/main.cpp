@@ -1293,6 +1293,7 @@ void loop() {
     wake();     // a button woke us: restore and run the loop normally
   }
 
+  bleService();    // crash-safe deferred advertising restart (Bug A)
   M5.Beep.update();
   t++;
   uint32_t now = millis();
